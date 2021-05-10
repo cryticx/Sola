@@ -1,0 +1,8 @@
+*
+!shaders/
+!.gitignore
+!*.h
+!*.c
+!*.rgen
+!*.rchit
+!*.rmiss
