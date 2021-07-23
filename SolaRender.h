@@ -6,14 +6,20 @@
 
 #include <vulkan/vulkan_core.h>
 
-#define MAX_SWAP_IMGS ((uint8_t) 3)
-#define MAX_QUEUED_FRAMES ((uint8_t) 2)
+#include <cglm/cglm.h>
 
-struct VulkanBuffer { // struct definition for returning members in buffer creation
+#define SR_MAX_SWAP_IMGS ((uint8_t) 3)
+#define SR_MAX_QUEUED_FRAMES ((uint8_t) 2)
+
+struct VulkanBuffer { // struct definition for returning in buffer creation
 	VkBuffer buffer;
 	VkDeviceMemory deviceMemory;
 };
-struct SolaRender { //TODO threaded optimization pass after model loading and camera starts working
+struct UniformData {
+	mat4 viewInverse;
+	mat4 projInverse;
+};
+struct SolaRender { //TODO threaded/deferred optimization pass
 	VkInstance instance;
 	
 	GLFWwindow* window;
@@ -27,15 +33,11 @@ struct SolaRender { //TODO threaded optimization pass after model loading and ca
 	uint32_t queueFamilyIndex;
 	
 	VkSwapchainKHR swapchain;
-	VkExtent2D swapExtent;
-	uint32_t swapImgCount; // may use less images than max, so keep track
+	uint32_t swapImgCount;
 	
-	VkCommandPool commandPool, transientCommandPool;
-	VkCommandBuffer renderCommandBuffers[MAX_SWAP_IMGS], transientCommandBuffer;
-	
-	struct VulkanBuffer vertexBuffer;
-	struct VulkanBuffer indexBuffer;
-	struct VulkanBuffer transformBuffer;
+	VkCommandPool renderCommandPool, accelStructBuildCommandPool;
+	VkCommandBuffer renderCommandBuffers[SR_MAX_SWAP_IMGS], accelStructBuildCommandBuffer;
+	VkFence accelStructBuildCommandBufferFence;
 	
 	VkAccelerationStructureKHR bottomAccelStruct;
 	struct VulkanBuffer bottomAccelStructBuffer;
@@ -43,9 +45,14 @@ struct SolaRender { //TODO threaded optimization pass after model loading and ca
 	VkAccelerationStructureKHR topAccelStruct;
 	struct VulkanBuffer topAccelStructBuffer;
 	
+	struct VulkanBuffer vertexBuffer;
+	struct VulkanBuffer indexBuffer;
+	struct VulkanBuffer scratchBuffer;
+	struct VulkanBuffer instanceBuffer;
+	
 	VkDescriptorPool descriptorPool;
 	VkDescriptorSetLayout descriptorSetLayout;
-	VkDescriptorSet descriptorSet;
+	VkDescriptorSet descriptorSets[SR_MAX_SWAP_IMGS];
 	
 	VkPipelineLayout pipelineLayout;
 	VkPipeline rayTracePipeline;
@@ -58,12 +65,13 @@ struct SolaRender { //TODO threaded optimization pass after model loading and ca
 	struct VulkanBuffer missShaderBindingTableBuffer;
 	struct VulkanBuffer closeHitShaderBindingTableBuffer;
 	
-	struct VulkanBuffer uniformBuffer;
+	struct VulkanBuffer uniformBuffers[SR_MAX_SWAP_IMGS];
+	struct UniformData uniformData;
 	
-	VkSemaphore imageAvailableSemaphores[MAX_QUEUED_FRAMES];
-	VkSemaphore renderFinishedSemaphores[MAX_QUEUED_FRAMES];
-	VkFence swapchainImageFences[MAX_SWAP_IMGS];
-	VkFence renderQueueFences[MAX_QUEUED_FRAMES];
+	VkSemaphore imageAvailableSemaphores[SR_MAX_QUEUED_FRAMES];
+	VkSemaphore renderFinishedSemaphores[SR_MAX_QUEUED_FRAMES];
+	VkFence swapchainImageFences[SR_MAX_SWAP_IMGS];
+	VkFence renderQueueFences[SR_MAX_QUEUED_FRAMES];
 	uint8_t currentFrame;
 	
 	PFN_vkGetBufferDeviceAddressKHR vkGetBufferDeviceAddressKHR;

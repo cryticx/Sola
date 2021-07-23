@@ -1,8 +1,10 @@
 *
 !shaders/
+!models/
 !.gitignore
 !*.h
 !*.c
 !*.rgen
 !*.rchit
 !*.rmiss
+!*.glb
