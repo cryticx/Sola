@@ -12,7 +12,7 @@ hitAttributeEXT vec2 attribs;
 
 layout(location = 0)				rayPayloadInEXT PrimaryPayload		payload;
 layout(location = 1) 				rayPayloadEXT ShadowPayload			shadowPayload;
-precision mediump float;
+
 layout(push_constant, scalar)		uniform _PushConstants				{ PushConstants pushConstants; };
 
 layout(binding = asBind)			uniform accelerationStructureEXT	topLevelAS;
