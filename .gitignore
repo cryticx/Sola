@@ -2,6 +2,7 @@
 !shaders/
 !models/
 !.gitignore
+!CMakeLists.txt
 !.editorconfig
 !*.h
 !*.c
