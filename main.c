@@ -30,7 +30,7 @@ int main() {
 	
 	vec3 cameraPos			= {0};
 	vec2 cameraOrientation	= {0};
-	
+
 	while (likely(!glfwWindowShouldClose(renderEngine.window))) {
 		glfwPollEvents();
 		
@@ -39,36 +39,38 @@ int main() {
 		
 		cameraOrientation[0] += (float) fmod((cursorPos.prevX - cursorPos.x) * 0.001f, GLM_PI * 2);
 		cameraOrientation[1] += (float) fmod((cursorPos.prevY - cursorPos.y) * 0.001f, CGLM_PI_2);
-		
+
 		// translate relative to orientation
-		float cosYaw = cosf(-cameraOrientation[0]) * 0.1f, sinYaw = sinf(-cameraOrientation[0]) * 0.1f, cosPitch = sinf(-cameraOrientation[1]) * 0.1f;
-		
+		float cosYaw = cosf(-cameraOrientation[0]), sinYaw = sinf(-cameraOrientation[0]), cosPitch = sinf(-cameraOrientation[1]);
+
+		float moveDelta = 0.1f;
+
 		if (glfwGetKey(renderEngine.window, GLFW_KEY_W)) {
-			cameraPos[0] += sinYaw;
-			cameraPos[1] -= cosPitch;
-			cameraPos[2] -= cosYaw;
+			cameraPos[0] += moveDelta * sinYaw;
+			cameraPos[1] -= moveDelta * cosPitch;
+			cameraPos[2] -= moveDelta * cosYaw;
 		}
 		if (glfwGetKey(renderEngine.window, GLFW_KEY_A)) {
-			cameraPos[0] -= cosYaw;
-			cameraPos[2] -= sinYaw;
+			cameraPos[0] -= moveDelta * cosYaw;
+			cameraPos[2] -= moveDelta * sinYaw;
 		}
 		if (glfwGetKey(renderEngine.window, GLFW_KEY_S)) {
-			cameraPos[0] -= sinYaw;
-			cameraPos[1] += cosPitch;
-			cameraPos[2] += cosYaw;
+			cameraPos[0] -= moveDelta * sinYaw;
+			cameraPos[1] += moveDelta * cosPitch;
+			cameraPos[2] += moveDelta * cosYaw;
 		}
 		if (glfwGetKey(renderEngine.window, GLFW_KEY_D)) {
-			cameraPos[0] += cosYaw;
-			cameraPos[2] += sinYaw;
+			cameraPos[0] += moveDelta * cosYaw;
+			cameraPos[2] += moveDelta * sinYaw;
 		}
-		cameraPos[1] += (glfwGetKey(renderEngine.window, GLFW_KEY_SPACE) - glfwGetKey(renderEngine.window, GLFW_KEY_C)) * 0.1f;
+		cameraPos[1] += moveDelta * (glfwGetKey(renderEngine.window, GLFW_KEY_SPACE) - glfwGetKey(renderEngine.window, GLFW_KEY_C));
+
+		glm_mat4_identity(renderEngine.rayGenUniform.viewInverse);
 		
-		glm_mat4_identity(renderEngine.cameraUniform.viewInverse);
+		glm_translate(renderEngine.rayGenUniform.viewInverse, cameraPos);
 		
-		glm_translate(renderEngine.cameraUniform.viewInverse, cameraPos);
-		
-		glm_rotate(renderEngine.cameraUniform.viewInverse, cameraOrientation[0], (vec3) { 0.f, 1.f, 0.f });
-		glm_rotate(renderEngine.cameraUniform.viewInverse, cameraOrientation[1], (vec3) { 1.f, 0.f, 0.f });
+		glm_rotate(renderEngine.rayGenUniform.viewInverse, cameraOrientation[0], (vec3) { 0.f, 1.f, 0.f });
+		glm_rotate(renderEngine.rayGenUniform.viewInverse, cameraOrientation[1], (vec3) { 1.f, 0.f, 0.f });
 		
 		srRenderFrame(&renderEngine);
 	}

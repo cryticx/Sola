@@ -6,23 +6,25 @@
 #include "hostDeviceCommon.glsl"
 #include "rayCommon.glsl"
 
-layout(location = 0)				rayPayloadEXT PrimaryPayload		payload;
+layout(location = 0)				rayPayloadEXT PrimaryPayload		primaryPayload;
 
 layout(binding = asBind)			uniform accelerationStructureEXT	topLevelAS;
 layout(binding = imgBind, rgba16f)	uniform image2D						image;
-layout(binding = camBind)			uniform _CameraUniform				{ CameraUniform cameraUniform; };
-
+layout(binding = genBind)			uniform _RayGenUniform				{ RayGenUniform rayGenUniform; };
 
 void main() {
 	const vec2 pixelCenter	= vec2(gl_LaunchIDEXT.xy) + vec2(0.5f);
 	const vec2 inUV			= pixelCenter / vec2(gl_LaunchSizeEXT.xy);
 	const vec2 d			= inUV * 2.f - 1.f;
 
-	const vec4 origin		= cameraUniform.viewInverse * vec4(0.f, 0.f, 0.f, 1.f);
-	const vec4 target		= cameraUniform.projInverse * vec4(d.x, d.y, 1.f, 1.f);
-	const vec4 direction	= cameraUniform.viewInverse * vec4(normalize(target.xyz), 0.f);
+	const vec4 origin		= rayGenUniform.viewInverse * vec4(0.f, 0.f, 0.f, 1.f);
+	const vec4 target		= rayGenUniform.projInverse * vec4(d.x, d.y, 1.f, 1.f);
+	const vec3 targetUnit	= normalize(target.xyz);
+	const vec4 direction	= rayGenUniform.viewInverse * vec4(targetUnit, 0.f);
 
-	traceRayEXT(topLevelAS, gl_RayFlagsOpaqueEXT, 0xFF, 0, 0, 0, origin.xyz, 0.001f, direction.xyz, 10000.f, 0);
-	
-	imageStore(image, ivec2(gl_LaunchIDEXT.xy), vec4(payload.hitColor / (vec3(1.f) + payload.hitColor), 0.f)); // store w/ Reinhard tone-mapping
+	primaryPayload.raySpreadAngle = 2.f * -targetUnit.z * -rayGenUniform.projInverse[1][1] / gl_LaunchSizeEXT.y; // good enough?
+
+	traceRayEXT(topLevelAS, gl_RayFlagsOpaqueEXT, 0xFF, 0, 0, 0, origin.xyz, clipNear, direction.xyz, clipFar, 0);
+
+	imageStore(image, ivec2(gl_LaunchIDEXT.xy), vec4(primaryPayload.hitColor / (vec3(1.f) + primaryPayload.hitColor), 0.f)); // store w/ Reinhard tone-mapping
 }

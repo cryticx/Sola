@@ -549,7 +549,7 @@ void createLogicalDevice(SolaRender* engine) {
 			[1].descriptorCount		= 1,
 			[1].stageFlags			= VK_SHADER_STAGE_RAYGEN_BIT_KHR,
 			
-			[2].binding				= SR_DESC_BIND_PT_CAM,
+			[2].binding				= SR_DESC_BIND_PT_GEN,
 			[2].descriptorType		= VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
 			[2].descriptorCount		= 1,
 			[2].stageFlags			= VK_SHADER_STAGE_RAYGEN_BIT_KHR,
@@ -658,14 +658,14 @@ void initializeGeometry(SolaRender* engine) {
 			}
 		geometries = calloc(modelData->meshes[0].primitives_count, sizeof(VkAccelerationStructureGeometryKHR) + sizeof(VkAccelerationStructureBuildRangeInfoKHR));
 		
-		Vertex* vertices = malloc(vertexCount * sizeof(Vertex) + modelData->materials_count * sizeof(Material) + modelData->meshes[0].primitives_count * sizeof(uint32_t));
+		Vertex* vertices = malloc(vertexCount * sizeof(Vertex) + modelData->materials_count * sizeof(MaterialInfo) + modelData->meshes[0].primitives_count * sizeof(uint32_t));
 		
 		engine->textureImageCount	= modelData->textures_count + 1;
 		engine->textureImages		= malloc(engine->textureImageCount * sizeof(VulkanImage));
 		
 		rangeInfos = (VkAccelerationStructureBuildRangeInfoKHR*) (geometries + modelData->meshes[0].primitives_count);
 		
-		Material*		materials	= (Material*)		(vertices	+ vertexCount);
+		MaterialInfo*	materials	= (MaterialInfo*)	(vertices	+ vertexCount);
 		uint32_t*		primCounts	= (uint32_t*)		(materials	+ modelData->materials_count);
 		
 		if (unlikely(!geometries || !vertices || !engine->textureImages)) {
@@ -716,10 +716,10 @@ void initializeGeometry(SolaRender* engine) {
 			ktxTexture_Destroy((ktxTexture*) texture);
 		}
 		for (uint16_t x = 0; x < modelData->materials_count; x++) {
-			memcpy(materials[x].colorFactor, modelData->materials[x].pbr_metallic_roughness.base_color_factor, sizeof(materials[x].colorFactor));
+			memcpy(materials[x].baseMat.colorFactor, modelData->materials[x].pbr_metallic_roughness.base_color_factor, sizeof(materials[x].baseMat.colorFactor));
 			
-			materials[x].metalFactor = modelData->materials[x].pbr_metallic_roughness.metallic_factor;
-			materials[x].roughFactor = modelData->materials[x].pbr_metallic_roughness.roughness_factor;
+			materials[x].baseMat.metalFactor = modelData->materials[x].pbr_metallic_roughness.metallic_factor;
+			materials[x].baseMat.roughFactor = modelData->materials[x].pbr_metallic_roughness.roughness_factor;
 			
 			if (modelData->materials[x].pbr_metallic_roughness.base_color_texture.texture)
 				materials[x].colorTexIdx = modelData->materials[x].pbr_metallic_roughness.base_color_texture.texture->extras.start_offset;
@@ -741,7 +741,7 @@ void initializeGeometry(SolaRender* engine) {
 			VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
 			VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &engine->pushConstants.vertexAddr, vertices);
 		
-		engine->materialBuffer = createBuffer(engine, modelData->materials_count * sizeof(Material),
+		engine->materialBuffer = createBuffer(engine, modelData->materials_count * sizeof(MaterialInfo),
 			VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
 			&engine->pushConstants.materialAddr, materials);
 		
@@ -1122,7 +1122,7 @@ void createRayTracingPipeline(SolaRender* engine) {
 			.imageView		= engine->rayImage.view,
 			.imageLayout	= VK_IMAGE_LAYOUT_GENERAL
 		};
-		VkDescriptorBufferInfo cameraUniformBufferInfo = { .range = sizeof(CameraUniform) };
+		VkDescriptorBufferInfo rayGenUniformBufferInfo = { .range = sizeof(RayGenUniform) };
 		VkDescriptorBufferInfo rayHitUniformBufferInfo = { .range = sizeof(RayHitUniform) };
 		
 		VkDescriptorImageInfo textureImageDescriptorInfos[SR_MAX_TEX_DESC];
@@ -1146,10 +1146,10 @@ void createRayTracingPipeline(SolaRender* engine) {
 			[1].pImageInfo		= &storageImageDescriptorInfo,
 			
 			[2].sType			= VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-			[2].dstBinding		= SR_DESC_BIND_PT_CAM,
+			[2].dstBinding		= SR_DESC_BIND_PT_GEN,
 			[2].descriptorCount	= 1,
 			[2].descriptorType	= VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-			[2].pBufferInfo		= &cameraUniformBufferInfo,
+			[2].pBufferInfo		= &rayGenUniformBufferInfo,
 			
 			[3].sType			= VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
 			[3].dstBinding		= SR_DESC_BIND_PT_HIT,
@@ -1164,19 +1164,18 @@ void createRayTracingPipeline(SolaRender* engine) {
 			[4].pImageInfo		= textureImageDescriptorInfos
 		};
 		mat4 temp;
-		
-		if (surfaceCapabilities.currentExtent.width >= surfaceCapabilities.currentExtent.height)
-			glm_perspective(glm_rad(70.f), glm_rad(surfaceCapabilities.currentExtent.width) / glm_rad(surfaceCapabilities.currentExtent.height), 0.1f, 512.f, temp);
-		else
-			glm_perspective(glm_rad(70.f), glm_rad(surfaceCapabilities.currentExtent.height) / glm_rad(surfaceCapabilities.currentExtent.width), 0.1f, 512.f, temp);
+
+		const float fovy = glm_rad(70.f);
+
+		glm_perspective(fovy, (float) surfaceCapabilities.currentExtent.width / (float) surfaceCapabilities.currentExtent.height, SR_CLIP_NEAR, SR_CLIP_FAR, temp);
 
 		temp[1][1] *= -1;
 
-		glm_mat4_inv(temp, engine->cameraUniform.projInverse);
-		
+		glm_mat4_inv(temp, engine->rayGenUniform.projInverse);
+
 		for (uint8_t x = 0; x < engine->swapImgCount; x++) {
-			engine->cameraUniformBuffers[x] = createBuffer(engine, sizeof(engine->cameraUniform), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
-				VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, NULL, &engine->cameraUniform);
+			engine->rayGenUniformBuffers[x] = createBuffer(engine, sizeof(engine->rayGenUniform), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+				VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, NULL, &engine->rayGenUniform);
 			
 			engine->rayHitUniformBuffers[x] = createBuffer(engine, sizeof(engine->rayHitUniform), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
 				VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, NULL, &engine->rayHitUniform);
@@ -1187,7 +1186,7 @@ void createRayTracingPipeline(SolaRender* engine) {
 			descriptorSetWrite[3].dstSet	= engine->descriptorSets[x];
 			descriptorSetWrite[4].dstSet	= engine->descriptorSets[x];
 			
-			cameraUniformBufferInfo.buffer	= engine->cameraUniformBuffers[x].buffer;
+			rayGenUniformBufferInfo.buffer	= engine->rayGenUniformBuffers[x].buffer;
 			rayHitUniformBufferInfo.buffer	= engine->rayHitUniformBuffers[x].buffer;
 			
 			vkUpdateDescriptorSets(engine->device, sizeof(descriptorSetWrite) / sizeof(VkWriteDescriptorSet), descriptorSetWrite, 0, NULL);
@@ -1299,28 +1298,26 @@ void createRayTracingPipeline(SolaRender* engine) {
 void srCreateEngine(SolaRender* engine, GLFWwindow* window) {
 	engine->window = window;
 
+	engine->rayHitUniform.lightCount = 3;
+
+	memcpy(engine->rayHitUniform.lights[0].pos,		(vec3) { -0.5f, 5.f, -1.f },	sizeof(vec3));
+	memcpy(engine->rayHitUniform.lights[0].color,	(vec3) { 40.f, 40.f, 40.f },	sizeof(vec3));
+
+	memcpy(engine->rayHitUniform.lights[1].pos,		(vec3) { 7.5f, 0.5f, 2.5f },	sizeof(vec3));
+	memcpy(engine->rayHitUniform.lights[1].color,	(vec3) { 4.f, 4.f, 4.f },		sizeof(vec3));
+
+	memcpy(engine->rayHitUniform.lights[2].pos,		(vec3) { -8.f, 0.5f, -3.f },	sizeof(vec3));
+	memcpy(engine->rayHitUniform.lights[2].color,	(vec3) { 4.f, 2.f, 1.f },		sizeof(vec3));
+
+	glm_mat4_identity(engine->rayGenUniform.viewInverse);
+
 	createInstance(engine);
 
 	VK_CHECK(glfwCreateWindowSurface(engine->instance, engine->window, NULL, &engine->surface))
 
 	selectPhysicalDevice(engine);
 	createLogicalDevice(engine);
-	
-	engine->rayHitUniform.lightCount = 3;
-	
-	memcpy(engine->rayHitUniform.lights[0].pos,		(vec3) { -0.5f, 5.f, -1.f },		sizeof(vec3));
-	memcpy(engine->rayHitUniform.lights[0].color,	(vec3) { 40.f, 40.f, 40.f },	sizeof(vec3));
-	
-	memcpy(engine->rayHitUniform.lights[1].pos,		(vec3) { 7.5f, 0.5f, 2.5f },	sizeof(vec3));
-	memcpy(engine->rayHitUniform.lights[1].color,	(vec3) { 4.f, 4.f, 4.f },		sizeof(vec3));
-	
-	memcpy(engine->rayHitUniform.lights[2].pos,		(vec3) { -8.f, 0.5f, -3.f },	sizeof(vec3));
-	memcpy(engine->rayHitUniform.lights[2].color,	(vec3) { 4.f, 2.f, 1.f },		sizeof(vec3));
-	
 	initializeGeometry(engine);
-	
-	glm_mat4_identity(engine->cameraUniform.viewInverse);
-	
 	createRayTracingPipeline(engine);
 
 	VK_CHECK(vkWaitForFences(engine->device, 1, &engine->accelStructBuildCmdBufferFence, VK_TRUE, UINT64_MAX))
@@ -1340,10 +1337,10 @@ void cleanupPipeline(SolaRender* engine) {
 	vkDestroySwapchainKHR(engine->device, engine->swapchain, NULL);
 	
 	for (uint8_t x = 0; x < engine->swapImgCount; x++) {
-		vkDestroyBuffer(engine->device, engine->cameraUniformBuffers[x].buffer, NULL);
+		vkDestroyBuffer(engine->device, engine->rayGenUniformBuffers[x].buffer, NULL);
 		vkDestroyBuffer(engine->device, engine->rayHitUniformBuffers[x].buffer, NULL);
 		
-		vkFreeMemory(engine->device, engine->cameraUniformBuffers[x].memory, NULL);
+		vkFreeMemory(engine->device, engine->rayGenUniformBuffers[x].memory, NULL);
 		vkFreeMemory(engine->device, engine->rayHitUniformBuffers[x].memory, NULL);
 	}
 	vkDestroyBuffer(engine->device, engine->raygenSBTBuffer.buffer, NULL);
@@ -1384,9 +1381,9 @@ void srRenderFrame(SolaRender* engine) {
 	}
 	void* data;
 	
-	vkMapMemory(engine->device, engine->cameraUniformBuffers[imageIndex].memory, 0, sizeof(engine->cameraUniform), 0, &data);
-	memcpy(data, &engine->cameraUniform, sizeof(engine->cameraUniform));
-	vkUnmapMemory(engine->device, engine->cameraUniformBuffers[imageIndex].memory);
+	vkMapMemory(engine->device, engine->rayGenUniformBuffers[imageIndex].memory, 0, sizeof(engine->rayGenUniform), 0, &data);
+	memcpy(data, &engine->rayGenUniform, sizeof(engine->rayGenUniform));
+	vkUnmapMemory(engine->device, engine->rayGenUniformBuffers[imageIndex].memory);
 	
 	vkMapMemory(engine->device, engine->rayHitUniformBuffers[imageIndex].memory, 0, sizeof(engine->rayHitUniform), 0, &data);
 	memcpy(data, &engine->rayHitUniform, sizeof(engine->rayHitUniform));
