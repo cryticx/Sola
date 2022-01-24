@@ -19,7 +19,7 @@ int main() {
 	glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
 	glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
 	
-	srCreateEngine(&renderEngine, glfwCreateWindow(1280, 720, "Sola", NULL, NULL));
+	srCreateEngine(&renderEngine, glfwCreateWindow(1920, 1080, "Sola", NULL, NULL));
 
 	glfwSetInputMode(renderEngine.window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
 	
@@ -31,7 +31,17 @@ int main() {
 	vec3 cameraPos			= {0};
 	vec2 cameraOrientation	= {0};
 
+	double currTime = glfwGetTime();
+
 	while (likely(!glfwWindowShouldClose(renderEngine.window))) {
+		double prevTime		= currTime;
+
+		currTime			= glfwGetTime();
+
+		double deltaTime	= currTime - prevTime;
+
+		float moveDelta		= deltaTime * 10.f;
+
 		glfwPollEvents();
 		
 		cursorPos.prevX = cursorPos.x, cursorPos.prevY = cursorPos.y;
@@ -42,8 +52,6 @@ int main() {
 
 		// translate relative to orientation
 		float cosYaw = cosf(-cameraOrientation[0]), sinYaw = sinf(-cameraOrientation[0]), cosPitch = sinf(-cameraOrientation[1]);
-
-		float moveDelta = 0.1f;
 
 		if (glfwGetKey(renderEngine.window, GLFW_KEY_W)) {
 			cameraPos[0] += moveDelta * sinYaw;
