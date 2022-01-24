@@ -282,7 +282,7 @@ VkShaderModule createShaderModule(SolaRender* engine, char* shaderPath) {
 	FILE *shaderFile = fopen(shaderPath, "r");
 	
 	if (unlikely(!shaderFile)) {
-		fprintf(stderr, "Failed to open shader file!\n");
+		fprintf(stderr, "Failed to open shader file \"%s\"!\n", shaderPath);
 		exit(1);
 	}
 	fseek(shaderFile, 0, SEEK_END);
