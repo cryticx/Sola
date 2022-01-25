@@ -18,11 +18,13 @@ layout(push_constant)				uniform _PushConstants				{ PushConstants pushConstants
 layout(binding = asBind)			uniform accelerationStructureEXT	topLevelAS;
 layout(binding = hitBind, scalar)	uniform _RayHitUniform				{ RayHitUniform rayHitUniform; };
 layout(binding = sampBind)			uniform sampler						texSampler;
-layout(binding = texBind)			uniform texture2D					textures[maxTex]; //TODO handle transparent textures?
+layout(binding = texBind)			uniform texture2D					textures[maxTex];
 
 layout(buffer_reference, scalar)	readonly buffer Indices				{ u16vec3		a[]; };
 layout(buffer_reference, scalar)	readonly buffer Vertices			{ Vertex		a[]; };
 layout(buffer_reference, scalar)	readonly buffer MaterialInfos		{ MaterialInfo	a[]; };
+
+const float PI = 3.14159265359f;
 
 // Akenine-Möller et al. 2021, "Improved shader and texture level of detail using ray cones"
 vec2[2] AnisotropicEllipseAxesAkenineMoller(vec3 worldPos, vec3 worldNorm, vec3 rayDir, float coneRadius, Vertex vertices[3], vec2 texUV) {
@@ -128,7 +130,7 @@ void main() {
 		const float	NdotL		= max(dot(worldNorm, L), 0.f);
 
 		if (NdotL > 0.f) {
-			const uint	rayFlags		= gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsOpaqueEXT | gl_RayFlagsSkipClosestHitShaderEXT;
+			const uint	rayFlags		= gl_RayFlagsSkipClosestHitShaderEXT;
 
 			const float	lightDist		= length(lightDir);
 

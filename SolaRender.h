@@ -69,9 +69,9 @@ typedef struct SolaRender { //TODO threaded/deferred optimization pass
 
 	VulkanImage					rayImage;
 
-	VulkanBuffer				raygenSBTBuffer;
+	VulkanBuffer				genSBTBuffer;
 	VulkanBuffer				missSBTBuffer;
-	VulkanBuffer				closeHitSBTBuffer;
+	VulkanBuffer				hitSBTBuffer;
 
 	VulkanBuffer				rayGenUniformBuffers[SR_MAX_SWAP_IMGS];
 	VulkanBuffer				rayHitUniformBuffers[SR_MAX_SWAP_IMGS];

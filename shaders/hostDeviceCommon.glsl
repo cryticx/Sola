@@ -91,6 +91,9 @@ struct Material {
 struct MaterialInfo {
 	// base factors
 	Material		baseMat;
+
+	// alpha
+	float			alphaCutoff;
 	
 	// index offsets
 	uint16_t		colorTexIdx;

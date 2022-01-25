@@ -24,7 +24,7 @@ void main() {
 
 	primaryPayload.raySpreadAngle = 2.f * -targetUnit.z * -rayGenUniform.projInverse[1][1] / gl_LaunchSizeEXT.y; // good enough?
 
-	traceRayEXT(topLevelAS, gl_RayFlagsOpaqueEXT, 0xFF, 0, 0, 0, origin.xyz, clipNear, direction.xyz, clipFar, 0);
+	traceRayEXT(topLevelAS, gl_RayFlagsNoneEXT, 0xFF, 0, 0, 0, origin.xyz, clipNear, direction.xyz, clipFar, 0);
 
 	imageStore(image, ivec2(gl_LaunchIDEXT.xy), vec4(primaryPayload.hitColor / (vec3(1.f) + primaryPayload.hitColor), 0.f)); // store w/ Reinhard tone-mapping
 }

@@ -557,18 +557,18 @@ void createLogicalDevice(SolaRender* engine) {
 			[3].binding				= SR_DESC_BIND_PT_HIT,
 			[3].descriptorType		= VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
 			[3].descriptorCount		= 1,
-			[3].stageFlags			= VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR,
+			[3].stageFlags			= VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR | VK_SHADER_STAGE_ANY_HIT_BIT_KHR,
 			
 			[4].binding				= SR_DESC_BIND_PT_SAMP,
 			[4].descriptorType		= VK_DESCRIPTOR_TYPE_SAMPLER,
 			[4].descriptorCount		= 1,
-			[4].stageFlags			= VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR,
+			[4].stageFlags			= VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR | VK_SHADER_STAGE_ANY_HIT_BIT_KHR,
 			[4].pImmutableSamplers	= &engine->textureSampler,
 			
 			[5].binding				= SR_DESC_BIND_PT_TEX,
 			[5].descriptorType		= VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
 			[5].descriptorCount		= SR_MAX_TEX_DESC,
-			[5].stageFlags			= VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR,
+			[5].stageFlags			= VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR | VK_SHADER_STAGE_ANY_HIT_BIT_KHR,
 		};
 		VkDescriptorSetLayoutCreateInfo descriptorSetLayoutInfo = {
 			.sType			= VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
@@ -715,7 +715,7 @@ void initializeGeometry(SolaRender* engine) {
 			
 			ktxTexture_Destroy((ktxTexture*) texture);
 		}
-		for (uint16_t x = 0; x < modelData->materials_count; x++) {
+		for (uint8_t x = 0; x < modelData->materials_count; x++) {
 			memcpy(materials[x].baseMat.colorFactor, modelData->materials[x].pbr_metallic_roughness.base_color_factor, sizeof(materials[x].baseMat.colorFactor));
 			
 			materials[x].baseMat.metalFactor = modelData->materials[x].pbr_metallic_roughness.metallic_factor;
@@ -730,6 +730,9 @@ void initializeGeometry(SolaRender* engine) {
 				materials[x].pbrTexIdx = modelData->materials[x].pbr_metallic_roughness.metallic_roughness_texture.texture->extras.start_offset;
 			else
 				materials[x].pbrTexIdx = 0;
+
+			if (modelData->materials[x].alpha_mode != cgltf_alpha_mode_opaque)
+				materials[x].alphaCutoff = modelData->materials[x].alpha_cutoff;
 			
 			modelData->materials[x].extras.start_offset = x; // material-reference for primitives
 		}
@@ -756,8 +759,12 @@ void initializeGeometry(SolaRender* engine) {
 			geometries[idxPrim].geometry.triangles.vertexStride				= sizeof(Vertex);
 			geometries[idxPrim].geometry.triangles.indexType				= VK_INDEX_TYPE_UINT16;
 			geometries[idxPrim].geometry.triangles.indexData.deviceAddress	= engine->pushConstants.indexAddr;
-			geometries[idxPrim].flags										= VK_GEOMETRY_OPAQUE_BIT_KHR;
-			
+
+			if (modelData->meshes[0].primitives[idxPrim].material->alpha_mode == cgltf_alpha_mode_opaque)
+				geometries[idxPrim].flags = VK_GEOMETRY_OPAQUE_BIT_KHR;
+			else
+				geometries[idxPrim].flags = VK_GEOMETRY_NO_DUPLICATE_ANY_HIT_INVOCATION_BIT_KHR;
+
 			rangeInfos[idxPrim].primitiveCount	= modelData->meshes[0].primitives[idxPrim].indices->count / 3;
 			rangeInfos[idxPrim].primitiveOffset	= modelData->meshes[0].primitives[idxPrim].indices->offset;
 			rangeInfos[idxPrim].firstVertex		= vertexCount;
@@ -943,11 +950,15 @@ void createRayTracingPipeline(SolaRender* engine) {
 		VK_CHECK(vkGetSwapchainImagesKHR(engine->device, engine->swapchain, &engine->swapImgCount, swapImages))
 	}
 	// Shader stages
-	#define RAYGEN_COUNT	((uint8_t) 1)
-	#define CHIT_COUNT		((uint8_t) 1)
-	#define MISS_COUNT		((uint8_t) 2)
+	#define GEN_SHADER_COUNT	((uint8_t) 1)
+	#define HIT_SHADER_COUNT	((uint8_t) 2)
+	#define MISS_SHADER_COUNT	((uint8_t) 2)
 
-	VkPipelineShaderStageCreateInfo shaderStageInfos[RAYGEN_COUNT + CHIT_COUNT + MISS_COUNT] = {
+	#define GEN_GROUP_COUNT		((uint8_t) 1)
+	#define HIT_GROUP_COUNT		((uint8_t) 1)
+	#define MISS_GROUP_COUNT	((uint8_t) 2)
+
+	VkPipelineShaderStageCreateInfo shaderStageInfos[GEN_SHADER_COUNT + HIT_SHADER_COUNT + MISS_SHADER_COUNT] = {
 		[0].sType	= VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
 		[0].stage	= VK_SHADER_STAGE_RAYGEN_BIT_KHR,
 		[0].module	= createShaderModule(engine, "shaders/gen.spv"),
@@ -957,18 +968,23 @@ void createRayTracingPipeline(SolaRender* engine) {
 		[1].stage	= VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR,
 		[1].module	= createShaderModule(engine, "shaders/closeHit.spv"),
 		[1].pName	= "main",
-		
+
 		[2].sType	= VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
-		[2].stage	= VK_SHADER_STAGE_MISS_BIT_KHR,
-		[2].module	= createShaderModule(engine, "shaders/miss.spv"),
+		[2].stage	= VK_SHADER_STAGE_ANY_HIT_BIT_KHR,
+		[2].module	= createShaderModule(engine, "shaders/anyHit.spv"),
 		[2].pName	= "main",
 		
 		[3].sType	= VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
 		[3].stage	= VK_SHADER_STAGE_MISS_BIT_KHR,
-		[3].module	= createShaderModule(engine, "shaders/shadow.spv"),
-		[3].pName	= "main"
+		[3].module	= createShaderModule(engine, "shaders/miss.spv"),
+		[3].pName	= "main",
+		
+		[4].sType	= VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+		[4].stage	= VK_SHADER_STAGE_MISS_BIT_KHR,
+		[4].module	= createShaderModule(engine, "shaders/shadow.spv"),
+		[4].pName	= "main"
 	};
-	VkRayTracingShaderGroupCreateInfoKHR shaderGroupInfos[RAYGEN_COUNT + CHIT_COUNT + MISS_COUNT] = {
+	VkRayTracingShaderGroupCreateInfoKHR shaderGroupInfos[GEN_GROUP_COUNT + HIT_GROUP_COUNT + MISS_GROUP_COUNT] = {
 		[0].sType				= VK_STRUCTURE_TYPE_RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR,
 		[0].type				= VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR,
 		[0].generalShader		= 0,
@@ -979,20 +995,20 @@ void createRayTracingPipeline(SolaRender* engine) {
 		[1].sType				= VK_STRUCTURE_TYPE_RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR,
 		[1].type				= VK_RAY_TRACING_SHADER_GROUP_TYPE_TRIANGLES_HIT_GROUP_KHR,
 		[1].generalShader		= VK_SHADER_UNUSED_KHR,
-		[1].closestHitShader	= 1,
-		[1].anyHitShader		= VK_SHADER_UNUSED_KHR,
+		[1].closestHitShader	= GEN_SHADER_COUNT,
+		[1].anyHitShader		= GEN_SHADER_COUNT + 1,
 		[1].intersectionShader	= VK_SHADER_UNUSED_KHR,
 		
 		[2].sType				= VK_STRUCTURE_TYPE_RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR,
 		[2].type				= VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR,
-		[2].generalShader		= 2,
+		[2].generalShader		= GEN_SHADER_COUNT + HIT_SHADER_COUNT,
 		[2].closestHitShader	= VK_SHADER_UNUSED_KHR,
 		[2].anyHitShader		= VK_SHADER_UNUSED_KHR,
 		[2].intersectionShader	= VK_SHADER_UNUSED_KHR,
 		
 		[3].sType				= VK_STRUCTURE_TYPE_RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR,
 		[3].type				= VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR,
-		[3].generalShader		= 3,
+		[3].generalShader		= GEN_SHADER_COUNT + HIT_SHADER_COUNT + 1,
 		[3].closestHitShader	= VK_SHADER_UNUSED_KHR,
 		[3].anyHitShader		= VK_SHADER_UNUSED_KHR,
 		[3].intersectionShader	= VK_SHADER_UNUSED_KHR
@@ -1000,7 +1016,7 @@ void createRayTracingPipeline(SolaRender* engine) {
 	// Pipeline
 	{
 		VkPushConstantRange pushConstantRange = {
-			.stageFlags	= VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR,
+			.stageFlags	= VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR | VK_SHADER_STAGE_ANY_HIT_BIT_KHR,
 			.size		= sizeof(PushConstants)
 		};
 		VkPipelineLayoutCreateInfo pipelineLayoutInfo = {
@@ -1027,7 +1043,7 @@ void createRayTracingPipeline(SolaRender* engine) {
 			vkDestroyShaderModule(engine->device, shaderStageInfos[x].module, NULL);
 	}
 	// Shader binding tables
-	VkStridedDeviceAddressRegionKHR raygenShaderSbt, closeHitShaderSbt, missShaderSbt;
+	VkStridedDeviceAddressRegionKHR genShaderSbt, hitShaderSbt, missShaderSbt;
 	VkStridedDeviceAddressRegionKHR callableShaderSbt = {0}; // Unused for now
 	{
 		VkPhysicalDeviceRayTracingPipelinePropertiesKHR rayTracePipelineProperties = {
@@ -1048,28 +1064,32 @@ void createRayTracingPipeline(SolaRender* engine) {
 			
 		VK_CHECK(engine->vkGetRayTracingShaderGroupHandlesKHR(engine->device, engine->rayTracePipeline, 0, sizeof(shaderGroupInfos) / sizeof(VkRayTracingShaderGroupCreateInfoKHR), sbtSize, shaderHandles))
 		
-		engine->raygenSBTBuffer = createBuffer(engine, rayTracePipelineProperties.shaderGroupHandleSize * RAYGEN_COUNT,
+		engine->genSBTBuffer = createBuffer(engine, rayTracePipelineProperties.shaderGroupHandleSize * GEN_GROUP_COUNT,
 			VK_BUFFER_USAGE_SHADER_BINDING_TABLE_BIT_KHR | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-			VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &raygenShaderSbt.deviceAddress, shaderHandles);
+			VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &genShaderSbt.deviceAddress, shaderHandles);
 		
-		engine->closeHitSBTBuffer = createBuffer(engine, rayTracePipelineProperties.shaderGroupHandleSize * CHIT_COUNT,
+		engine->hitSBTBuffer = createBuffer(engine, rayTracePipelineProperties.shaderGroupHandleSize * HIT_GROUP_COUNT,
 			VK_BUFFER_USAGE_SHADER_BINDING_TABLE_BIT_KHR | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-			VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &closeHitShaderSbt.deviceAddress, shaderHandles + alignedHandleSize * RAYGEN_COUNT);
+			VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &hitShaderSbt.deviceAddress, shaderHandles + alignedHandleSize * GEN_GROUP_COUNT);
 		
-		engine->missSBTBuffer = createBuffer(engine, rayTracePipelineProperties.shaderGroupHandleSize * MISS_COUNT,
+		engine->missSBTBuffer = createBuffer(engine, rayTracePipelineProperties.shaderGroupHandleSize * MISS_GROUP_COUNT,
 			VK_BUFFER_USAGE_SHADER_BINDING_TABLE_BIT_KHR | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-			VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &missShaderSbt.deviceAddress, shaderHandles + alignedHandleSize * (RAYGEN_COUNT + CHIT_COUNT));
+			VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &missShaderSbt.deviceAddress, shaderHandles + alignedHandleSize * (GEN_GROUP_COUNT + HIT_GROUP_COUNT));
 		
-		raygenShaderSbt.stride = closeHitShaderSbt.stride = missShaderSbt.stride = alignedHandleSize;
+		genShaderSbt.stride = hitShaderSbt.stride = missShaderSbt.stride = alignedHandleSize;
 		
-		raygenShaderSbt.size	= alignedHandleSize * RAYGEN_COUNT;
-		closeHitShaderSbt.size	= alignedHandleSize * CHIT_COUNT;
-		missShaderSbt.size		= alignedHandleSize * MISS_COUNT;
+		genShaderSbt.size	= alignedHandleSize * GEN_GROUP_COUNT;
+		hitShaderSbt.size	= alignedHandleSize * HIT_GROUP_COUNT;
+		missShaderSbt.size	= alignedHandleSize * MISS_GROUP_COUNT;
 	}
-	#undef RAYGEN_COUNT
-	#undef CHIT_COUNT
-	#undef MISS_COUNT
-	
+	#undef GEN_SHADER_COUNT
+	#undef HIT_SHADER_COUNT
+	#undef MISS_SHADER_COUNT
+
+	#undef GEN_GROUP_COUNT
+	#undef HIT_GROUP_COUNT
+	#undef MISS_GROUP_COUNT
+
 	// Descriptors
 	VkImageSubresourceRange subresourceRange = {
 		.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
@@ -1260,9 +1280,9 @@ void createRayTracingPipeline(SolaRender* engine) {
 			vkCmdBindPipeline(engine->renderCmdBuffers[x], VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, engine->rayTracePipeline);
 			vkCmdBindDescriptorSets(engine->renderCmdBuffers[x], VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, engine->pipelineLayout, 0, 1, &engine->descriptorSets[x], 0, NULL);
 			
-			vkCmdPushConstants(engine->renderCmdBuffers[x], engine->pipelineLayout, VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR, 0, sizeof(PushConstants), &engine->pushConstants);
+			vkCmdPushConstants(engine->renderCmdBuffers[x], engine->pipelineLayout, VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR | VK_SHADER_STAGE_ANY_HIT_BIT_KHR, 0, sizeof(PushConstants), &engine->pushConstants);
 			
-			engine->vkCmdTraceRaysKHR(engine->renderCmdBuffers[x], &raygenShaderSbt, &missShaderSbt, &closeHitShaderSbt, &callableShaderSbt, surfaceCapabilities.currentExtent.width, surfaceCapabilities.currentExtent.height, 1);
+			engine->vkCmdTraceRaysKHR(engine->renderCmdBuffers[x], &genShaderSbt, &missShaderSbt, &hitShaderSbt, &callableShaderSbt, surfaceCapabilities.currentExtent.width, surfaceCapabilities.currentExtent.height, 1);
 			
 			imageMemoryBarriers[0].srcAccessMask	= 0;
 			imageMemoryBarriers[0].dstAccessMask	= VK_ACCESS_TRANSFER_READ_BIT;
@@ -1343,13 +1363,13 @@ void cleanupPipeline(SolaRender* engine) {
 		vkFreeMemory(engine->device, engine->rayGenUniformBuffers[x].memory, NULL);
 		vkFreeMemory(engine->device, engine->rayHitUniformBuffers[x].memory, NULL);
 	}
-	vkDestroyBuffer(engine->device, engine->raygenSBTBuffer.buffer, NULL);
+	vkDestroyBuffer(engine->device, engine->genSBTBuffer.buffer, NULL);
 	vkDestroyBuffer(engine->device, engine->missSBTBuffer.buffer, NULL);
-	vkDestroyBuffer(engine->device, engine->closeHitSBTBuffer.buffer, NULL);
+	vkDestroyBuffer(engine->device, engine->hitSBTBuffer.buffer, NULL);
 	
-	vkFreeMemory(engine->device, engine->raygenSBTBuffer.memory, NULL);
+	vkFreeMemory(engine->device, engine->genSBTBuffer.memory, NULL);
 	vkFreeMemory(engine->device, engine->missSBTBuffer.memory, NULL);
-	vkFreeMemory(engine->device, engine->closeHitSBTBuffer.memory, NULL);
+	vkFreeMemory(engine->device, engine->hitSBTBuffer.memory, NULL);
 	
 	vkDestroyDescriptorPool(engine->device, engine->descriptorPool, NULL);
 }
