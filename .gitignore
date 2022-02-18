@@ -5,7 +5,7 @@
 !.gitignore
 !CMakeLists.txt
 !.editorconfig
-!.README.md
+!README.md
 !*.h
 !*.c
 !*.glsl
