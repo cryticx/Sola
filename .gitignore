@@ -1,9 +1,11 @@
 *
 !shaders/
 !models/
+!screenshots/
 !.gitignore
 !CMakeLists.txt
 !.editorconfig
+!.README.md
 !*.h
 !*.c
 !*.glsl
@@ -11,3 +13,4 @@
 !*.rchit
 !*.rmiss
 !*.glb
+!*.png

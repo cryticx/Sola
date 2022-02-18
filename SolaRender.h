@@ -10,7 +10,7 @@
 
 #define SR_MAX_SWAP_IMGS		((uint8_t) 3)
 #define SR_MAX_QUEUED_FRAMES	((uint8_t) 2)
-#define SR_MAX_RAY_RECURSION	((uint8_t) 2)
+#define SR_MAX_RAY_RECURSION	((uint8_t) 3)
 
 typedef struct VulkanBuffer {
 	VkBuffer		buffer;
@@ -23,7 +23,7 @@ typedef struct VulkanImage {
 	VkImageView					view;
 } VulkanImage;
 
-typedef struct SolaRender { //TODO threaded/deferred optimization pass
+typedef struct SolaRender { //TODO coalesce Vulkan buffers and sub-allocate
 	VkInstance					instance;
 
 	GLFWwindow*					window;
@@ -42,10 +42,13 @@ typedef struct SolaRender { //TODO threaded/deferred optimization pass
 	VkCommandPool				renderCmdPool, transientCommandPool;
 	VkCommandBuffer				renderCmdBuffers[SR_MAX_SWAP_IMGS], accelStructBuildCmdBuffer;
 	VkFence						accelStructBuildCmdBufferFence;
+	VulkanBuffer				accelStructBuildScratchBuffer;
 
-	VkAccelerationStructureKHR	bottomAccelStruct;
+	VkAccelerationStructureKHR	bottomAccelStructs[SR_MAX_BLAS];
+	VulkanBuffer				bottomAccelStructBuffers[SR_MAX_BLAS];
+	uint8_t						bottomAccelStructCount;
+
 	VkAccelerationStructureKHR	topAccelStruct;
-	VulkanBuffer				bottomAccelStructBuffer;
 	VulkanBuffer				topAccelStructBuffer;
 
 	VulkanBuffer				indexBuffer;
@@ -53,7 +56,7 @@ typedef struct SolaRender { //TODO threaded/deferred optimization pass
 	VulkanBuffer				materialBuffer;
 
 	VkSampler					textureSampler;
-	VulkanImage*				textureImages;
+	VulkanImage					textureImages[SR_MAX_TEX_DESC];
 	uint16_t					textureImageCount;
 
 	PushConstants				pushConstants;
@@ -65,7 +68,7 @@ typedef struct SolaRender { //TODO threaded/deferred optimization pass
 	VkDescriptorSet				descriptorSets[SR_MAX_SWAP_IMGS];
 
 	VkPipelineLayout			pipelineLayout;
-	VkPipeline					rayTracePipeline; //TODO hybrid or pure RT pipeline (figure out transparency first)? LoD-like accel-structs?
+	VkPipeline					rayTracePipeline; //TODO hybrid or pure RT pipeline? LoD-like accel-structs?
 
 	VulkanImage					rayImage;
 

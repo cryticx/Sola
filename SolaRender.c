@@ -95,7 +95,7 @@ VulkanBuffer createBuffer(SolaRender* engine, VkDeviceSize size, VkBufferUsageFl
 		.size	= size,
 		.usage	= usage
 	};
-	VK_CHECK(vkCreateBuffer(engine->device, &bufferInfo, NULL, &buffer.buffer) != VK_SUCCESS)
+	VK_CHECK(vkCreateBuffer(engine->device, &bufferInfo, NULL, &buffer.buffer))
 	
 	VkMemoryRequirements memRequirements;
 	vkGetBufferMemoryRequirements(engine->device, buffer.buffer, &memRequirements);
@@ -256,7 +256,7 @@ VulkanImage createImage(SolaRender* engine, uint32_t mipLevels, VkFormat format,
 	}
 	return image;
 }
-void buildAccelerationStructure(SolaRender* engine, VkAccelerationStructureBuildGeometryInfoKHR* geometryInfo, const VkAccelerationStructureBuildRangeInfoKHR* rangeInfo) {
+void buildAccelerationStructures(SolaRender* engine, uint8_t infoCount, VkAccelerationStructureBuildGeometryInfoKHR* geometryInfos, VkAccelerationStructureBuildRangeInfoKHR** rangeInfosArray) {
 	VK_CHECK(vkWaitForFences(engine->device, 1, &engine->accelStructBuildCmdBufferFence, VK_TRUE, UINT64_MAX))
 	VK_CHECK(vkResetFences(engine->device, 1, &engine->accelStructBuildCmdBufferFence))
 	VK_CHECK(vkResetCommandPool(engine->device, engine->transientCommandPool, 0))
@@ -266,8 +266,18 @@ void buildAccelerationStructure(SolaRender* engine, VkAccelerationStructureBuild
 		.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT
 	};
 	VK_CHECK(vkBeginCommandBuffer(engine->accelStructBuildCmdBuffer, &commandBufferBeginInfo))
-	
-	engine->vkCmdBuildAccelerationStructuresKHR(engine->accelStructBuildCmdBuffer, 1, geometryInfo, &rangeInfo);
+
+	for (uint8_t x = 0; x < infoCount; x++) {
+		engine->vkCmdBuildAccelerationStructuresKHR(engine->accelStructBuildCmdBuffer, 1, &geometryInfos[x], (const VkAccelerationStructureBuildRangeInfoKHR**) &rangeInfosArray[x]);
+
+		VkMemoryBarrier barrier = {
+			.sType			= VK_STRUCTURE_TYPE_MEMORY_BARRIER,
+			.srcAccessMask	= VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
+			.dstAccessMask	= VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR
+		};
+		vkCmdPipelineBarrier(engine->accelStructBuildCmdBuffer, VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+			VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR, 0, 1, &barrier, 0, NULL, 0, NULL);
+	}
 	
 	VK_CHECK(vkEndCommandBuffer(engine->accelStructBuildCmdBuffer))
 	
@@ -280,7 +290,7 @@ void buildAccelerationStructure(SolaRender* engine, VkAccelerationStructureBuild
 }
 VkShaderModule createShaderModule(SolaRender* engine, char* shaderPath) {
 	FILE *shaderFile = fopen(shaderPath, "r");
-	
+
 	if (unlikely(!shaderFile)) {
 		fprintf(stderr, "Failed to open shader file \"%s\"!\n", shaderPath);
 		exit(1);
@@ -291,7 +301,7 @@ VkShaderModule createShaderModule(SolaRender* engine, char* shaderPath) {
 	char* shaderCode = malloc(shaderSize);
 	fread(shaderCode, 1, shaderSize, shaderFile);
 	fclose(shaderFile);
-	
+
 	VkShaderModuleCreateInfo createInfo = {
 		.sType		= VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
 		.codeSize	= shaderSize,
@@ -611,73 +621,105 @@ void createLogicalDevice(SolaRender* engine) {
 }
 void initializeGeometry(SolaRender* engine) {
 	// Geometry and bottom-level acceleration structure
-	VkAccelerationStructureGeometryKHR*			geometries;
-	VkAccelerationStructureBuildRangeInfoKHR*	rangeInfos;
-	
-	VkAccelerationStructureBuildGeometryInfoKHR geometryInfo = {
-		.sType	= VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR,
-		.type	= VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR,
-		.flags	= VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR
-	};
-	VkAccelerationStructureBuildSizesInfoKHR	sizesInfo = {
-		.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR
-	};
-	VkAccelerationStructureCreateInfoKHR		accelStructInfo = {
-		.sType	= VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR,
-		.type	= VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR
-	};
-	VulkanBuffer scratchBuffer;
+	VkAccelerationStructureGeometryKHR*				geometries;
+	VkAccelerationStructureBuildRangeInfoKHR*		rangeInfos;
+	VkAccelerationStructureBuildRangeInfoKHR**		rangeInfosArray;
+	VkAccelerationStructureBuildGeometryInfoKHR*	buildGeometryInfos;
+	VkAccelerationStructureBuildSizesInfoKHR*		sizesInfos;
+	VkAccelerationStructureCreateInfoKHR*			accelStructInfos;
+	VkAccelerationStructureInstanceKHR*				accelStructInstances;
+
+	VkDeviceSize scratchSize = 0;
 	{
-		cgltf_options modelOptions = {
+		cgltf_options sceneOptions = {
 			.type = cgltf_file_type_glb
 		};
-		cgltf_data* modelData;
-		
-		CGLTF_CHECK(cgltf_parse_file(&modelOptions, "models/Sponza.glb", &modelData))
+		cgltf_data* sceneData[2];
 
-		uint32_t vertexCount;
-		const void* vertexBufferAddresses[3];
-		
-		for (uint8_t x = 0; x < modelData->meshes[0].primitives[0].attributes_count; x++)
-			switch (modelData->meshes[0].primitives[0].attributes[x].type) {
-				case (cgltf_attribute_type_position):
-					vertexBufferAddresses[0] = modelData->bin + modelData->meshes->primitives[0].attributes[x].data->buffer_view->offset;
-					vertexCount = modelData->meshes->primitives[0].attributes[x].data->buffer_view->size / sizeof(vec3);
-					break;
-					
-				case (cgltf_attribute_type_normal):
-					vertexBufferAddresses[1] = modelData->bin + modelData->meshes->primitives[0].attributes[x].data->buffer_view->offset;
-					break;
-					
-				case (cgltf_attribute_type_texcoord):
-					vertexBufferAddresses[2] = modelData->bin + modelData->meshes->primitives[0].attributes[x].data->buffer_view->offset;
-					break;
-					
-				default:
-					break;
+		CGLTF_CHECK(cgltf_parse_file(&sceneOptions, "models/Sponza.glb",			&sceneData[0]))
+		CGLTF_CHECK(cgltf_parse_file(&sceneOptions, "models/DamagedHelmet.glb",		&sceneData[1]))
+
+		engine->textureImageCount		= 1; // first texure is a default, white texture
+
+		uint8_t			materialCount	= 0;
+		uint8_t			primitiveCount	= 0;
+		VkDeviceSize	indexBufferSize = 0;
+		uint32_t		vertexCount		= 0;
+
+		struct PerMeshData {
+			uint32_t	indexBufferSize;
+			uint32_t	vertexCount;
+
+			const void*	indexAddr;
+			const void*	posAddr;
+			const void*	normAddr;
+			const void*	texUVAddr;
+		} perMeshData[SR_MAX_BLAS];
+
+		uint8_t idxMesh = 0;
+
+		for (uint8_t idxScene = 0; idxScene < sizeof(sceneData) / sizeof(void*); idxScene++) {
+			engine->textureImageCount	+= sceneData[idxScene]->textures_count;
+
+			materialCount				+= sceneData[idxScene]->materials_count;
+
+			for (uint8_t idxSceneMesh = 0; idxSceneMesh < sceneData[idxScene]->meshes_count; idxSceneMesh++) {
+				perMeshData[idxMesh].indexBufferSize	= sceneData[idxScene]->meshes[idxSceneMesh].primitives[0].indices->buffer_view->size;
+				perMeshData[idxMesh].indexAddr			= sceneData[idxScene]->bin + sceneData[idxScene]->meshes[idxSceneMesh].primitives[0].indices->buffer_view->offset;
+
+				primitiveCount	+= sceneData[idxScene]->meshes[idxSceneMesh].primitives_count;
+				indexBufferSize	+= perMeshData[idxMesh].indexBufferSize;
+
+				perMeshData[idxMesh].texUVAddr = 0; // textures are optional
+
+				for (uint8_t idxAttr = 0; idxAttr < sceneData[idxScene]->meshes[idxSceneMesh].primitives[0].attributes_count; idxAttr++)
+					switch (sceneData[idxScene]->meshes[idxSceneMesh].primitives[0].attributes[idxAttr].type) {
+						case (cgltf_attribute_type_position):
+							perMeshData[idxMesh].posAddr		= sceneData[idxScene]->bin + sceneData[idxScene]->meshes[idxSceneMesh].primitives[0].attributes[idxAttr].data->buffer_view->offset;
+
+							perMeshData[idxMesh].vertexCount	= sceneData[idxScene]->meshes[idxSceneMesh].primitives[0].attributes[idxAttr].data->buffer_view->size / sizeof(vec3);
+
+							vertexCount += perMeshData[idxScene].vertexCount;
+							break;
+
+						case (cgltf_attribute_type_normal):
+							perMeshData[idxMesh].normAddr		= sceneData[idxScene]->bin + sceneData[idxScene]->meshes[idxSceneMesh].primitives[0].attributes[idxAttr].data->buffer_view->offset;
+							break;
+
+						case (cgltf_attribute_type_texcoord):
+							perMeshData[idxMesh].texUVAddr		= sceneData[idxScene]->bin + sceneData[idxScene]->meshes[idxSceneMesh].primitives[0].attributes[idxAttr].data->buffer_view->offset;
+							break;
+
+						default:
+							break;
+					}
+				idxMesh++;
 			}
-		geometries = calloc(modelData->meshes[0].primitives_count, sizeof(VkAccelerationStructureGeometryKHR) + sizeof(VkAccelerationStructureBuildRangeInfoKHR));
+		}
+		engine->bottomAccelStructCount = idxMesh;
+
+		geometries = calloc(1, primitiveCount * (sizeof(VkAccelerationStructureGeometryKHR) + sizeof(VkAccelerationStructureBuildRangeInfoKHR))
+			+ engine->bottomAccelStructCount * (sizeof(void*) + sizeof(VkAccelerationStructureBuildGeometryInfoKHR) + sizeof(VkAccelerationStructureBuildSizesInfoKHR)
+			+ sizeof(VkAccelerationStructureCreateInfoKHR) + sizeof(VkAccelerationStructureInstanceKHR)));
 		
-		Vertex* vertices = malloc(vertexCount * sizeof(Vertex) + modelData->materials_count * sizeof(MaterialInfo) + modelData->meshes[0].primitives_count * sizeof(uint32_t));
+		Vertex* vertices = malloc(vertexCount * sizeof(Vertex) + indexBufferSize + materialCount * sizeof(MaterialInfo) + primitiveCount * sizeof(uint32_t));
+
+		rangeInfos				= (VkAccelerationStructureBuildRangeInfoKHR*)		(geometries			+ primitiveCount);
+		rangeInfosArray			= (VkAccelerationStructureBuildRangeInfoKHR**)		(rangeInfos			+ primitiveCount);
+		buildGeometryInfos		= (VkAccelerationStructureBuildGeometryInfoKHR*)	(rangeInfosArray	+ engine->bottomAccelStructCount);
+		sizesInfos				= (VkAccelerationStructureBuildSizesInfoKHR*)		(buildGeometryInfos	+ engine->bottomAccelStructCount);
+		accelStructInfos		= (VkAccelerationStructureCreateInfoKHR*)			(sizesInfos			+ engine->bottomAccelStructCount);
+		accelStructInstances	= (VkAccelerationStructureInstanceKHR*)				(accelStructInfos	+ engine->bottomAccelStructCount);
 		
-		engine->textureImageCount	= modelData->textures_count + 1;
-		engine->textureImages		= malloc(engine->textureImageCount * sizeof(VulkanImage));
+		char*			indices		= (char*)			(vertices	+ vertexCount);
+		MaterialInfo*	materials	= (MaterialInfo*)	(indices	+ indexBufferSize);
+		uint32_t*		primCounts	= (uint32_t*)		(materials	+ materialCount);
 		
-		rangeInfos = (VkAccelerationStructureBuildRangeInfoKHR*) (geometries + modelData->meshes[0].primitives_count);
-		
-		MaterialInfo*	materials	= (MaterialInfo*)	(vertices	+ vertexCount);
-		uint32_t*		primCounts	= (uint32_t*)		(materials	+ modelData->materials_count);
-		
-		if (unlikely(!geometries || !vertices || !engine->textureImages)) {
+		if (unlikely(!geometries || !vertices)) {
 			fprintf(stderr, "Failed to allocate host memory!\n");
 			exit(1);
 		}
-		for (uint32_t x = 0; x < vertexCount; x++) { // interleaving attributes
-			memcpy(vertices[x].pos,		vertexBufferAddresses[0] + x * sizeof(vec3), sizeof(vec3));
-			memcpy(vertices[x].norm,	vertexBufferAddresses[1] + x * sizeof(vec3), sizeof(vec3));
-			memcpy(vertices[x].texUV,	vertexBufferAddresses[2] + x * sizeof(vec2), sizeof(vec2));
-		}
-		// Default texture
+		// Default white texture
 		{
 			ktxTextureCreateInfo textureInfo = {
 				.vkFormat		= VK_FORMAT_R8G8B8A8_SRGB,
@@ -700,159 +742,251 @@ void initializeGeometry(SolaRender* engine) {
 			
 			ktxTexture_Destroy((ktxTexture*) texture);
 		}
-		for (uint16_t x = 0; x < modelData->textures_count; x++) {
-			ktxTexture2* texture;
-			
-			KTX_CHECK(ktxTexture2_CreateFromMemory(modelData->bin + modelData->textures[x].basisu_image->buffer_view->offset,
-					modelData->textures[x].basisu_image->buffer_view->size, KTX_TEXTURE_CREATE_LOAD_IMAGE_DATA_BIT, &texture))
-			
-			KTX_CHECK(ktxTexture2_TranscodeBasis(texture, KTX_TTF_BC7_RGBA, 0))
-			
-			engine->textureImages[x + 1] = createImage(engine, texture->numLevels, VK_FORMAT_BC7_SRGB_BLOCK, (VkExtent2D) { texture->baseWidth, texture->baseHeight },
-				VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, (ktxTexture*) texture);
-			
-			modelData->textures[x].extras.start_offset = x + 1; // texture-reference for materials
-			
-			ktxTexture_Destroy((ktxTexture*) texture);
-		}
-		for (uint8_t x = 0; x < modelData->materials_count; x++) {
-			memcpy(materials[x].baseMat.colorFactor, modelData->materials[x].pbr_metallic_roughness.base_color_factor, sizeof(materials[x].baseMat.colorFactor));
-			
-			materials[x].baseMat.metalFactor = modelData->materials[x].pbr_metallic_roughness.metallic_factor;
-			materials[x].baseMat.roughFactor = modelData->materials[x].pbr_metallic_roughness.roughness_factor;
-			
-			if (modelData->materials[x].pbr_metallic_roughness.base_color_texture.texture)
-				materials[x].colorTexIdx = modelData->materials[x].pbr_metallic_roughness.base_color_texture.texture->extras.start_offset;
-			else
-				materials[x].colorTexIdx = 0;
-			
-			if (modelData->materials[x].pbr_metallic_roughness.metallic_roughness_texture.texture)
-				materials[x].pbrTexIdx = modelData->materials[x].pbr_metallic_roughness.metallic_roughness_texture.texture->extras.start_offset;
-			else
-				materials[x].pbrTexIdx = 0;
 
-			if (modelData->materials[x].alpha_mode != cgltf_alpha_mode_opaque)
-				materials[x].alphaCutoff = modelData->materials[x].alpha_cutoff;
-			
-			modelData->materials[x].extras.start_offset = x; // material-reference for primitives
+		char* indexSlice = indices;
+
+		idxMesh = 0;
+
+		uint32_t	idxVert		= 0;
+		uint16_t	idxTexture	= 1;
+		uint8_t		idxMaterial	= 0;
+
+		for (uint8_t idxScene = 0; idxScene < sizeof(sceneData) / sizeof(void*); idxScene++) {
+			for (uint8_t idxSceneMesh = 0; idxSceneMesh < sceneData[idxScene]->meshes_count; idxSceneMesh++) {
+				memcpy(indexSlice, perMeshData[idxMesh].indexAddr, perMeshData[idxMesh].indexBufferSize);
+
+				indexSlice += perMeshData[idxMesh].indexBufferSize;
+
+				// interleaving attributes
+				for (uint32_t idxSceneVert = 0; idxSceneVert < perMeshData[idxMesh].vertexCount; idxSceneVert++) {
+					memcpy(vertices[idxVert + idxSceneVert].pos,	perMeshData[idxMesh].posAddr	+ idxSceneVert * sizeof(vec3), sizeof(vec3));
+					memcpy(vertices[idxVert + idxSceneVert].norm,	perMeshData[idxMesh].normAddr	+ idxSceneVert * sizeof(vec3), sizeof(vec3));
+				}
+				if (perMeshData[idxMesh].texUVAddr) {
+					for (uint32_t idxSceneVert = 0; idxSceneVert < perMeshData[idxMesh].vertexCount; idxSceneVert++)
+						memcpy(vertices[idxVert + idxSceneVert].texUV, perMeshData[idxMesh].texUVAddr + idxSceneVert * sizeof(vec2), sizeof(vec2));
+				}
+				else
+					for (uint32_t idxSceneVert = 0; idxSceneVert < perMeshData[idxMesh].vertexCount; idxSceneVert++)
+						memcpy(vertices[idxVert + idxSceneVert].texUV, (vec2) {0, 0}, sizeof(vec2));
+
+				idxVert += perMeshData[idxMesh].vertexCount;
+				idxMesh++;
+			}
+			for (uint16_t idxSceneTexture = 0; idxSceneTexture < sceneData[idxScene]->textures_count; idxSceneTexture++) {
+				ktxTexture2* texture;
+
+				KTX_CHECK(ktxTexture2_CreateFromMemory(sceneData[idxScene]->bin + sceneData[idxScene]->textures[idxSceneTexture].basisu_image->buffer_view->offset,
+						sceneData[idxScene]->textures[idxSceneTexture].basisu_image->buffer_view->size, KTX_TEXTURE_CREATE_LOAD_IMAGE_DATA_BIT, &texture))
+
+				KTX_CHECK(ktxTexture2_TranscodeBasis(texture, KTX_TTF_BC7_RGBA, 0))
+
+				engine->textureImages[idxTexture] = createImage(engine, texture->numLevels, VK_FORMAT_BC7_SRGB_BLOCK, (VkExtent2D) { texture->baseWidth, texture->baseHeight },
+					VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, (ktxTexture*) texture);
+
+				sceneData[idxScene]->textures[idxSceneTexture].extras.start_offset = idxTexture; // texture-reference for materials
+
+				ktxTexture_Destroy((ktxTexture*) texture);
+
+				idxTexture++;
+			}
+			for (uint8_t idxSceneMaterial = 0; idxSceneMaterial < sceneData[idxScene]->materials_count; idxSceneMaterial++) {
+				memcpy(materials[idxMaterial].baseMat.colorFactor,		sceneData[idxScene]->materials[idxSceneMaterial].pbr_metallic_roughness.base_color_factor,	sizeof(vec3));
+				memcpy(materials[idxMaterial].baseMat.emissiveFactor,	sceneData[idxScene]->materials[idxSceneMaterial].emissive_factor,							sizeof(vec3));
+
+				materials[idxMaterial].baseMat.metalFactor = sceneData[idxScene]->materials[idxSceneMaterial].pbr_metallic_roughness.metallic_factor;
+				materials[idxMaterial].baseMat.roughFactor = sceneData[idxScene]->materials[idxSceneMaterial].pbr_metallic_roughness.roughness_factor;
+
+				if (sceneData[idxScene]->materials[idxSceneMaterial].pbr_metallic_roughness.base_color_texture.texture)
+					materials[idxMaterial].colorTexIdx = sceneData[idxScene]->materials[idxSceneMaterial].pbr_metallic_roughness.base_color_texture.texture->extras.start_offset;
+				else
+					materials[idxMaterial].colorTexIdx = 0;
+
+				if (sceneData[idxScene]->materials[idxSceneMaterial].pbr_metallic_roughness.metallic_roughness_texture.texture)
+					materials[idxMaterial].pbrTexIdx = sceneData[idxScene]->materials[idxSceneMaterial].pbr_metallic_roughness.metallic_roughness_texture.texture->extras.start_offset;
+				else
+					materials[idxMaterial].pbrTexIdx = 0;
+
+				if (sceneData[idxScene]->materials[idxSceneMaterial].emissive_texture.texture)
+					materials[idxMaterial].emissiveTexIdx = sceneData[idxScene]->materials[idxSceneMaterial].emissive_texture.texture->extras.start_offset;
+				else
+					materials[idxMaterial].emissiveTexIdx = 0;
+
+				if (sceneData[idxScene]->materials[idxSceneMaterial].occlusion_texture.texture)
+					materials[idxMaterial].occludeTexIdx = sceneData[idxScene]->materials[idxSceneMaterial].occlusion_texture.texture->extras.start_offset;
+				else
+					materials[idxMaterial].occludeTexIdx = 0;
+
+				materials[idxMaterial].alphaCutoff = sceneData[idxScene]->materials[idxSceneMaterial].alpha_cutoff;
+
+				sceneData[idxScene]->materials[idxSceneMaterial].extras.start_offset = idxMaterial; // material-reference for primitives
+
+				idxMaterial++;
+			}
 		}
-		engine->indexBuffer = createBuffer(engine, modelData->meshes[0].primitives[0].indices->buffer_view->size,
+		engine->indexBuffer = createBuffer(engine, indexBufferSize,
 			VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-			VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &engine->pushConstants.indexAddr, modelData->bin + modelData->meshes[0].primitives[0].indices->buffer_view->offset);
+			VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &engine->pushConstants.indexAddr, indices);
 		
 		engine->vertexBuffer = createBuffer(engine, vertexCount * sizeof(Vertex),
 			VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
 			VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &engine->pushConstants.vertexAddr, vertices);
 		
-		engine->materialBuffer = createBuffer(engine, modelData->materials_count * sizeof(MaterialInfo),
+		engine->materialBuffer = createBuffer(engine, materialCount * sizeof(MaterialInfo),
 			VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
 			&engine->pushConstants.materialAddr, materials);
-		
-		vertexCount = 0;
-		
-		for (uint16_t idxPrim = 0; idxPrim < modelData->meshes[0].primitives_count; idxPrim++) {
-			geometries[idxPrim].sType										= VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
-			geometries[idxPrim].geometryType								= VK_GEOMETRY_TYPE_TRIANGLES_KHR;
-			geometries[idxPrim].geometry.triangles.sType					= VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
-			geometries[idxPrim].geometry.triangles.vertexFormat				= VK_FORMAT_R32G32B32_SFLOAT;
-			geometries[idxPrim].geometry.triangles.vertexData.deviceAddress	= engine->pushConstants.vertexAddr;
-			geometries[idxPrim].geometry.triangles.vertexStride				= sizeof(Vertex);
-			geometries[idxPrim].geometry.triangles.indexType				= VK_INDEX_TYPE_UINT16;
-			geometries[idxPrim].geometry.triangles.indexData.deviceAddress	= engine->pushConstants.indexAddr;
 
-			if (modelData->meshes[0].primitives[idxPrim].material->alpha_mode == cgltf_alpha_mode_opaque)
-				geometries[idxPrim].flags = VK_GEOMETRY_OPAQUE_BIT_KHR;
-			else
-				geometries[idxPrim].flags = VK_GEOMETRY_NO_DUPLICATE_ANY_HIT_INVOCATION_BIT_KHR;
+		uint8_t		idxGeom		= 0;
+		uint32_t	indexOffset	= 0;
 
-			rangeInfos[idxPrim].primitiveCount	= modelData->meshes[0].primitives[idxPrim].indices->count / 3;
-			rangeInfos[idxPrim].primitiveOffset	= modelData->meshes[0].primitives[idxPrim].indices->offset;
-			rangeInfos[idxPrim].firstVertex		= vertexCount;
-			
-			primCounts[idxPrim] = rangeInfos[idxPrim].primitiveCount;
-			
-			engine->rayHitUniform.geometryOffsets[idxPrim].index	= rangeInfos[idxPrim].primitiveOffset;
-			engine->rayHitUniform.geometryOffsets[idxPrim].vertex	= vertexCount * sizeof(Vertex);
-			engine->rayHitUniform.geometryOffsets[idxPrim].material	= (uint8_t) modelData->meshes[0].primitives[idxPrim].material->extras.start_offset;
-			
-			for (uint8_t idxAttr = 0; idxAttr < modelData->meshes[0].primitives[idxPrim].attributes_count; idxAttr++)
-				if (modelData->meshes[0].primitives[idxPrim].attributes[idxAttr].type == cgltf_attribute_type_position) {
-					vertexCount += geometries[idxPrim].geometry.triangles.maxVertex = modelData->meshes[0].primitives[idxPrim].attributes[idxAttr].data->count;
-					break;
+		idxVert = 0;
+		idxMesh = 0;
+
+		for (uint8_t idxScene = 0; idxScene < sizeof(sceneData) / sizeof(void*); idxScene++)
+			for (uint8_t idxSceneMesh = 0; idxSceneMesh < sceneData[idxScene]->meshes_count; idxSceneMesh++) {
+
+				rangeInfosArray[idxMesh] = &rangeInfos[idxGeom];
+
+				engine->rayHitUniform.instanceOffsets[idxMesh] = idxGeom;
+
+				for (uint16_t idxPrim = 0; idxPrim < sceneData[idxScene]->meshes[idxSceneMesh].primitives_count; idxPrim++) {
+					geometries[idxGeom].sType										= VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
+					geometries[idxGeom].geometryType								= VK_GEOMETRY_TYPE_TRIANGLES_KHR;
+					geometries[idxGeom].geometry.triangles.sType					= VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
+					geometries[idxGeom].geometry.triangles.vertexFormat				= VK_FORMAT_R32G32B32_SFLOAT;
+					geometries[idxGeom].geometry.triangles.vertexData.deviceAddress	= engine->pushConstants.vertexAddr;
+					geometries[idxGeom].geometry.triangles.vertexStride				= sizeof(Vertex);
+					geometries[idxGeom].geometry.triangles.maxVertex				= sceneData[idxScene]->meshes[idxSceneMesh].primitives[idxPrim].attributes[0].data->count - 1;
+					geometries[idxGeom].geometry.triangles.indexType				= VK_INDEX_TYPE_UINT16;
+					geometries[idxGeom].geometry.triangles.indexData.deviceAddress	= engine->pushConstants.indexAddr;
+
+					if (sceneData[idxScene]->meshes[idxSceneMesh].primitives[idxPrim].material->alpha_mode == cgltf_alpha_mode_opaque)
+						geometries[idxGeom].flags = VK_GEOMETRY_OPAQUE_BIT_KHR;
+					else
+						geometries[idxGeom].flags = VK_GEOMETRY_NO_DUPLICATE_ANY_HIT_INVOCATION_BIT_KHR;
+
+					rangeInfos[idxGeom].primitiveCount	= sceneData[idxScene]->meshes[idxSceneMesh].primitives[idxPrim].indices->count / 3;
+					rangeInfos[idxGeom].primitiveOffset	= indexOffset + sceneData[idxScene]->meshes[idxSceneMesh].primitives[idxPrim].indices->offset;
+					rangeInfos[idxGeom].firstVertex		= idxVert;
+
+					primCounts[idxGeom] = rangeInfos[idxGeom].primitiveCount;
+
+					engine->rayHitUniform.geometryOffsets[idxGeom].index	= rangeInfos[idxGeom].primitiveOffset;
+					engine->rayHitUniform.geometryOffsets[idxGeom].vertex	= idxVert * sizeof(Vertex);
+					engine->rayHitUniform.geometryOffsets[idxGeom].material	= (uint8_t) sceneData[idxScene]->meshes[idxSceneMesh].primitives[idxPrim].material->extras.start_offset;
+
+					idxVert += sceneData[idxScene]->meshes[idxSceneMesh].primitives[idxPrim].attributes[0].data->count;
+					idxGeom++;
 				}
-		}
-		geometryInfo.geometryCount	= modelData->meshes[0].primitives_count;
-		geometryInfo.pGeometries	= geometries;
-		
-		engine->vkGetAccelerationStructureBuildSizesKHR(engine->device, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR, &geometryInfo, primCounts, &sizesInfo);
-		
-		engine->bottomAccelStructBuffer = createBuffer(engine, sizesInfo.accelerationStructureSize,
-			VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, NULL, NULL);
-			
-		accelStructInfo.buffer	= engine->bottomAccelStructBuffer.buffer,
-		accelStructInfo.size	= sizesInfo.accelerationStructureSize;
-			
-		VK_CHECK(engine->vkCreateAccelerationStructureKHR(engine->device, &accelStructInfo, NULL, &engine->bottomAccelStruct))
-		
-		geometryInfo.dstAccelerationStructure = engine->bottomAccelStruct;
-		
-		scratchBuffer = createBuffer(engine, sizesInfo.buildScratchSize,
+				buildGeometryInfos[idxMesh].sType			= VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
+				buildGeometryInfos[idxMesh].type			= VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
+				buildGeometryInfos[idxMesh].flags			= VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
+				buildGeometryInfos[idxMesh].geometryCount	= sceneData[idxScene]->meshes[idxSceneMesh].primitives_count;
+				buildGeometryInfos[idxMesh].pGeometries		= geometries;
+
+				sizesInfos[idxMesh].sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR;
+
+				engine->vkGetAccelerationStructureBuildSizesKHR(engine->device, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
+					&buildGeometryInfos[idxMesh], primCounts, &sizesInfos[idxMesh]);
+
+				engine->bottomAccelStructBuffers[idxMesh] = createBuffer(engine, sizesInfos[idxMesh].accelerationStructureSize,
+					VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, NULL, NULL);
+
+				accelStructInfos[idxMesh].sType		= VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR;
+				accelStructInfos[idxMesh].buffer	= engine->bottomAccelStructBuffers[idxMesh].buffer,
+				accelStructInfos[idxMesh].size		= sizesInfos[idxMesh].accelerationStructureSize;
+				accelStructInfos[idxMesh].type		= VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
+
+				if (scratchSize < sizesInfos[idxMesh].buildScratchSize)
+					scratchSize = sizesInfos[idxMesh].buildScratchSize;
+
+				VK_CHECK(engine->vkCreateAccelerationStructureKHR(engine->device, &accelStructInfos[idxMesh], NULL, &engine->bottomAccelStructs[idxMesh]))
+
+				buildGeometryInfos[idxMesh].dstAccelerationStructure = engine->bottomAccelStructs[idxMesh];
+
+				VkAccelerationStructureDeviceAddressInfoKHR accelStructAddressInfo = {
+					.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR,
+					.accelerationStructure = engine->bottomAccelStructs[idxMesh]
+				};
+				accelStructInstances[idxMesh].transform = (VkTransformMatrixKHR) { {
+						{ 1.f, 0.f, 0.f, 0.f},
+						{ 0.f, 1.f, 0.f, 0.f },
+						{ 0.f, 0.f, 1.f, 0.f }
+					} };
+				accelStructInstances[idxMesh].mask = 0xFF;
+				accelStructInstances[idxMesh].flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
+				accelStructInstances[idxMesh].accelerationStructureReference = engine->vkGetAccelerationStructureDeviceAddressKHR(engine->device, &accelStructAddressInfo);
+
+				indexOffset += perMeshData[idxMesh].indexBufferSize;
+				idxMesh++;
+			}
+		engine->accelStructBuildScratchBuffer = createBuffer(engine, scratchSize,
 			VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-			&geometryInfo.scratchData.deviceAddress, NULL);
-		
-		buildAccelerationStructure(engine, &geometryInfo, rangeInfos);
+			&buildGeometryInfos[0].scratchData.deviceAddress, NULL);
+
+		for (uint8_t x = 1; x < engine->bottomAccelStructCount; x++)
+			buildGeometryInfos[x].scratchData.deviceAddress = buildGeometryInfos[0].scratchData.deviceAddress;
+
+		buildAccelerationStructures(engine, engine->bottomAccelStructCount, buildGeometryInfos, rangeInfosArray);
 
 		free(vertices);
 		
-		cgltf_free(modelData);
+		for (uint8_t x = 0; x < sizeof(sceneData) / sizeof(void*); x++)
+			cgltf_free(sceneData[x]);
 	}
+	mat4 rotation = GLM_MAT4_IDENTITY_INIT;
+
+	glm_rotate_x(rotation, glm_rad(10.f), rotation);
+	glm_rotate_y(rotation, glm_rad(40.f), rotation);
+
+	memcpy(&accelStructInstances[1].transform, rotation, sizeof(VkTransformMatrixKHR));
+
+	accelStructInstances[1].transform.matrix[0][3] = 3.f;
+	accelStructInstances[1].transform.matrix[1][3] = 3.f;
+
 	// Top-level acceleration structure
 	{
-		VkAccelerationStructureDeviceAddressInfoKHR accelStructAddressInfo = {
-			.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR,
-			.accelerationStructure = engine->bottomAccelStruct
-		};
-		VkAccelerationStructureInstanceKHR accelStructInstance = {
-			.transform = { {
-				{ 1.f, 0.f, 0.f, 0.f },
-				{ 0.f, 1.f, 0.f, 0.f },
-				{ 0.f, 0.f, 1.f, 0.f }
-			} },
-			.mask = 0xFF,
-			.flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR,
-			.accelerationStructureReference = engine->vkGetAccelerationStructureDeviceAddressKHR(engine->device, &accelStructAddressInfo)
-		};
 		geometries[0].geometryType							= VK_GEOMETRY_TYPE_INSTANCES_KHR;
 		geometries[0].geometry.instances.sType				= VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_INSTANCES_DATA_KHR;
 		geometries[0].geometry.instances.pNext				= NULL;
 		geometries[0].geometry.instances.arrayOfPointers	= VK_FALSE;
-		
-		engine->instanceBuffer = createBuffer(engine, sizeof(accelStructInstance),
+
+		engine->instanceBuffer = createBuffer(engine, engine->bottomAccelStructCount * sizeof(VkAccelerationStructureInstanceKHR),
 			VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-			VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &geometries[0].geometry.instances.data.deviceAddress, &accelStructInstance);
+			VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &geometries[0].geometry.instances.data.deviceAddress, accelStructInstances);
 		
-		geometryInfo.type			= VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR;
-		geometryInfo.geometryCount	= 1;
+		buildGeometryInfos[0].type			= VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR;
+		buildGeometryInfos[0].geometryCount	= 1;
+
+		rangeInfos[0].primitiveCount	= engine->bottomAccelStructCount;
+		rangeInfos[0].primitiveOffset	= 0;
+
+		engine->vkGetAccelerationStructureBuildSizesKHR(engine->device, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR, &buildGeometryInfos[0], &rangeInfos[0].primitiveCount, &sizesInfos[0]);
 		
-		engine->vkGetAccelerationStructureBuildSizesKHR(engine->device, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR, &geometryInfo, &geometryInfo.geometryCount, &sizesInfo);
-		
-		engine->topAccelStructBuffer = createBuffer(engine, sizesInfo.accelerationStructureSize,
+		if (unlikely(scratchSize < sizesInfos[0].accelerationStructureSize)) {
+			VK_CHECK(vkWaitForFences(engine->device, 1, &engine->accelStructBuildCmdBufferFence, VK_TRUE, UINT64_MAX))
+
+			vkDestroyBuffer(engine->device, engine->accelStructBuildScratchBuffer.buffer, NULL);
+			vkFreeMemory(engine->device, engine->accelStructBuildScratchBuffer.memory, NULL);
+
+			scratchSize = sizesInfos[0].accelerationStructureSize;
+
+			engine->accelStructBuildScratchBuffer = createBuffer(engine, scratchSize,
+				VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+				&buildGeometryInfos[0].scratchData.deviceAddress, NULL);
+		}
+		engine->topAccelStructBuffer = createBuffer(engine, sizesInfos[0].accelerationStructureSize,
 			VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, NULL, NULL);
 		
-		accelStructInfo.buffer	= engine->topAccelStructBuffer.buffer;
-		accelStructInfo.size	= sizesInfo.accelerationStructureSize;
-		accelStructInfo.type	= VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR;
+		accelStructInfos[0].buffer	= engine->topAccelStructBuffer.buffer;
+		accelStructInfos[0].size	= sizesInfos[0].accelerationStructureSize;
+		accelStructInfos[0].type	= VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR;
 		
-		VK_CHECK(engine->vkCreateAccelerationStructureKHR(engine->device, &accelStructInfo, NULL, &engine->topAccelStruct))
+		VK_CHECK(engine->vkCreateAccelerationStructureKHR(engine->device, &accelStructInfos[0], NULL, &engine->topAccelStruct))
 		
-		geometryInfo.dstAccelerationStructure = engine->topAccelStruct;
+		buildGeometryInfos[0].dstAccelerationStructure = engine->topAccelStruct;
 		
-		rangeInfos[0].primitiveCount = 1;
-		
-		buildAccelerationStructure(engine, &geometryInfo, rangeInfos);
-		
-		vkDestroyBuffer(engine->device, scratchBuffer.buffer, NULL);
-		vkFreeMemory(engine->device, scratchBuffer.memory, NULL);
+		buildAccelerationStructures(engine, 1, buildGeometryInfos, &rangeInfos);
 		
 		free(geometries);
 	}
@@ -1341,6 +1475,9 @@ void srCreateEngine(SolaRender* engine, GLFWwindow* window) {
 	createRayTracingPipeline(engine);
 
 	VK_CHECK(vkWaitForFences(engine->device, 1, &engine->accelStructBuildCmdBufferFence, VK_TRUE, UINT64_MAX))
+
+	vkDestroyBuffer(engine->device, engine->accelStructBuildScratchBuffer.buffer, NULL);
+	vkFreeMemory(engine->device, engine->accelStructBuildScratchBuffer.memory, NULL);
 }
 void cleanupPipeline(SolaRender* engine) {
 	vkDeviceWaitIdle(engine->device);
@@ -1451,19 +1588,21 @@ void srDestroyEngine(SolaRender* engine) {
 	cleanupPipeline(engine);
 	
 	engine->vkDestroyAccelerationStructureKHR(engine->device, engine->topAccelStruct, NULL);
-	engine->vkDestroyAccelerationStructureKHR(engine->device, engine->bottomAccelStruct, NULL);
 
+	for (uint8_t x = 0; x < engine->bottomAccelStructCount; x++) {
+		engine->vkDestroyAccelerationStructureKHR(engine->device, engine->bottomAccelStructs[x], NULL);
+		vkDestroyBuffer(engine->device, engine->bottomAccelStructBuffers[x].buffer, NULL);
+		vkFreeMemory(engine->device, engine->bottomAccelStructBuffers[x].memory, NULL);
+	}
 	vkDestroyFence(engine->device, engine->accelStructBuildCmdBufferFence, NULL);
 
 	vkDestroyBuffer(engine->device, engine->topAccelStructBuffer.buffer, NULL);
-	vkDestroyBuffer(engine->device, engine->bottomAccelStructBuffer.buffer, NULL);
 	vkDestroyBuffer(engine->device, engine->instanceBuffer.buffer, NULL);
 	vkDestroyBuffer(engine->device, engine->vertexBuffer.buffer, NULL);
 	vkDestroyBuffer(engine->device, engine->indexBuffer.buffer, NULL);
 	vkDestroyBuffer(engine->device, engine->materialBuffer.buffer, NULL);
 
 	vkFreeMemory(engine->device, engine->topAccelStructBuffer.memory, NULL);
-	vkFreeMemory(engine->device, engine->bottomAccelStructBuffer.memory, NULL);
 	vkFreeMemory(engine->device, engine->instanceBuffer.memory, NULL);
 	vkFreeMemory(engine->device, engine->vertexBuffer.memory, NULL);
 	vkFreeMemory(engine->device, engine->indexBuffer.memory, NULL);

@@ -22,7 +22,8 @@ void main() {
 	const vec3 targetUnit	= normalize(target.xyz);
 	const vec4 direction	= rayGenUniform.viewInverse * vec4(targetUnit, 0.f);
 
-	primaryPayload.raySpreadAngle = 2.f * -targetUnit.z * -rayGenUniform.projInverse[1][1] / gl_LaunchSizeEXT.y; // good enough?
+	primaryPayload.raySpreadAngle = 2.f * -targetUnit.z * -rayGenUniform.projInverse[1][1] / gl_LaunchSizeEXT.y;
+	primaryPayload.recursionDepth = uint8_t(0);
 
 	traceRayEXT(topLevelAS, gl_RayFlagsNoneEXT, 0xFF, 0, 0, 0, origin.xyz, clipNear, direction.xyz, clipFar, 0);
 

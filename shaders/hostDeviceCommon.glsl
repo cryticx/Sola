@@ -10,7 +10,9 @@
 #define SR_MAX_TEX_DESC	((uint16_t) 1024)
 
 #define SR_CLIP_NEAR	((float) 0.001f)
-#define SR_CLIP_FAR		((float) 512.f)
+#define SR_CLIP_FAR		((float) 1024.f)
+
+#define SR_MAX_BLAS		((uint8_t) 32)
 
 typedef		struct RayGenUniform	RayGenUniform;
 typedef		struct GeometryOffsets	GeometryOffsets;
@@ -47,7 +49,9 @@ const uint	hitBind		= 3;
 const uint	sampBind	= 4;
 const uint	texBind		= 5;
 
-const uint	maxTex	= 1024;
+const uint	maxTex		= 1024;
+
+const uint	SR_MAX_BLAS	= 32;
 
 #endif
 
@@ -55,7 +59,7 @@ struct RayGenUniform {
 	mat4			viewInverse;
 	mat4			projInverse;
 };
-struct GeometryOffsets { // each geometry corresponds to a GLTF primitive
+struct GeometryOffsets {
 	// byte offsets
 	uint32_t		index;
 	uint32_t		vertex;
@@ -72,6 +76,8 @@ struct RayHitUniform {
 
 	Light			lights[32];
 	uint8_t			lightCount;
+
+	uint8_t			instanceOffsets[SR_MAX_BLAS];
 };
 struct PushConstants {
 	uint64_t		indexAddr;
@@ -85,6 +91,7 @@ struct Vertex {
 };
 struct Material {
 	vec3			colorFactor;
+	vec3			emissiveFactor;
 	float			metalFactor;
 	float			roughFactor;
 };
@@ -97,6 +104,8 @@ struct MaterialInfo {
 	
 	// index offsets
 	uint16_t		colorTexIdx;
+	uint16_t		emissiveTexIdx;
+	uint16_t		occludeTexIdx;
 	uint16_t		pbrTexIdx;
 };
 

@@ -77,14 +77,15 @@ vec3 Fresnel(float VdotH, float metalFactor, vec3 colorFactor) {
 	// Schlick 1994, "An Inexpensive BRDF Model for Physically-Based Rendering"
 	return f0 + (vec3(1.f) - f0) * pow(1.f - VdotH, 5.f);
 }
-vec3 BRDF(float NdotV, float NdotL, float NdotH, float VdotH, Material mat) {
+vec3 BRDF(float NdotL, float NdotV, float NdotH, float VdotH, Material mat) {
+
 	const float	a			= mat.roughFactor * mat.roughFactor;
 
 	const float	D			= DistributionGGX(NdotH, a);
-	const float	V			= VisibilitySchlick(NdotL, NdotV, a);
+	const float	Vis			= VisibilitySchlick(NdotL, NdotV, a);
 	const vec3	F			= Fresnel(VdotH, mat.metalFactor, mat.colorFactor);
 
-	const vec3	specular	= D * V * F;
+	const vec3	specular	= D * Vis * F;
 
 	const vec3	diffuse		= (vec3(1.f) - F) * (1.f - mat.metalFactor) * mat.colorFactor / PI;
 
@@ -93,11 +94,13 @@ vec3 BRDF(float NdotV, float NdotL, float NdotH, float VdotH, Material mat) {
 void main() {
 	const vec3			barycentrics	= vec3(1.f - attribs.x - attribs.y, attribs.x, attribs.y);
 
-	const u16vec3		indices			= Indices	(pushConstants.indexAddr	+ rayHitUniform.geometryOffsets[gl_GeometryIndexEXT].index).a[gl_PrimitiveID];
+	const uint			geometryIndex	= rayHitUniform.instanceOffsets[gl_InstanceID] + gl_GeometryIndexEXT;
 
-	Vertices			pVertices		= Vertices	(pushConstants.vertexAddr	+ rayHitUniform.geometryOffsets[gl_GeometryIndexEXT].vertex);
+	const u16vec3		indices			= Indices	(pushConstants.indexAddr	+ rayHitUniform.geometryOffsets[geometryIndex].index).a[gl_PrimitiveID];
 
-	const MaterialInfo	matInfo			= MaterialInfos(pushConstants.materialAddr).a[rayHitUniform.geometryOffsets[gl_GeometryIndexEXT].material];
+	Vertices			pVertices		= Vertices	(pushConstants.vertexAddr	+ rayHitUniform.geometryOffsets[geometryIndex].vertex);
+
+	const MaterialInfo	matInfo			= MaterialInfos(pushConstants.materialAddr).a[rayHitUniform.geometryOffsets[geometryIndex].material];
 	
 	const Vertex		vertices[3]		= Vertex[3](pVertices.a[indices.x], pVertices.a[indices.y], pVertices.a[indices.z]);
 	
@@ -111,12 +114,15 @@ void main() {
 
 	const vec2			texUV			= vertices[0].texUV * barycentrics.x + vertices[1].texUV * barycentrics.y + vertices[2].texUV * barycentrics.z;
 
-	const vec2			dPdxy[2]		= AnisotropicEllipseAxesAkenineMoller(worldPos, worldNorm, gl_WorldRayDirectionEXT, rayConeRadius, vertices, texUV);
+	const vec2			dPdxy[2]		= AnisotropicEllipseAxesAkenineMoller(objPos, objNorm, gl_ObjectRayDirectionEXT, rayConeRadius, vertices, texUV);
 
-	const vec3			colorTex		= vec3(textureGrad(sampler2D(textures[matInfo.colorTexIdx],	texSampler), texUV, dPdxy[0], dPdxy[1]));
-	const vec2			pbrTex			= vec2(textureGrad(sampler2D(textures[matInfo.pbrTexIdx],	texSampler), texUV, dPdxy[0], dPdxy[1]));
+	const vec3			colorTex		= vec3(	textureGrad(sampler2D(textures[matInfo.colorTexIdx],	texSampler), texUV, dPdxy[0], dPdxy[1]));
+	const vec3			emissiveTex		= vec3(	textureGrad(sampler2D(textures[matInfo.emissiveTexIdx],	texSampler), texUV, dPdxy[0], dPdxy[1]));
+	const float			occludeTex		= float(textureGrad(sampler2D(textures[matInfo.occludeTexIdx],	texSampler), texUV, dPdxy[0], dPdxy[1]));
+	const vec3			pbrTex			= vec3(	textureGrad(sampler2D(textures[matInfo.pbrTexIdx],		texSampler), texUV, dPdxy[0], dPdxy[1]));
 
-	const Material		mat				= Material(matInfo.baseMat.colorFactor * colorTex, matInfo.baseMat.metalFactor * pbrTex.x, matInfo.baseMat.roughFactor * pbrTex.y);
+	const Material		mat				= Material(	matInfo.baseMat.colorFactor * colorTex, matInfo.baseMat.emissiveFactor * emissiveTex,
+													matInfo.baseMat.metalFactor * pbrTex.b, matInfo.baseMat.roughFactor * pbrTex.g);
 
 	vec3				irradiance		= vec3(0.f);
 
@@ -136,7 +142,7 @@ void main() {
 
 			shadowPayload.isShadowed	= true;
 
-			traceRayEXT(topLevelAS, rayFlags, 0xFF, 0, 0, 1, worldPos, 0.00001f, L, lightDist, 1);
+			traceRayEXT(topLevelAS, rayFlags, 0xFF, 0, 0, 1, worldPos, 0.0001f, L, lightDist, 1); //TODO figure out how to better integrate shadow-termination w/ normal attenuation
 
 			if (!shadowPayload.isShadowed) {
 				const vec3	V			= -gl_WorldRayDirectionEXT;
@@ -146,11 +152,25 @@ void main() {
 				const float NdotH		= max(dot(worldNorm, H), 0.f);
 				const float VdotH		= max(dot(V, H), 0.f);
 
-				const float attenuation	= NdotL / (lightDist * lightDist + 1.f);
+				const float attenuation = NdotL / (lightDist * lightDist + 1.f);
 
-				irradiance				+= attenuation * light.color * BRDF(NdotV, NdotL, NdotH, VdotH, mat);
+				irradiance += attenuation * light.color * BRDF(NdotL, NdotV, NdotH, VdotH, mat);
 			}
 		}
 	}
-	payload.hitColor = irradiance;
+	payload.recursionDepth++;
+
+	if (mat.roughFactor < 0.1f && payload.recursionDepth < uint8_t(2)) { //TODO make reflections properly utilize roughness
+		const vec3	L		= reflect(gl_WorldRayDirectionEXT, worldNorm);
+		const vec3	V		= -gl_WorldRayDirectionEXT;
+		const vec3	H		= normalize(V + L);
+
+		traceRayEXT(topLevelAS, gl_RayFlagsNoneEXT, 0xFF, 0, 0, 0, worldPos, 0.0001f, L, clipFar - gl_HitTEXT, 0);
+
+		const float	VdotH	= max(dot(V, H), 0.f);
+
+		payload.hitColor	= payload.hitColor * Fresnel(VdotH, mat.metalFactor, mat.colorFactor) * (1.f - 10.f * mat.roughFactor) + occludeTex * irradiance + mat.emissiveFactor;
+	}
+	else
+		payload.hitColor = occludeTex * irradiance + mat.emissiveFactor;
 }
