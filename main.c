@@ -40,7 +40,7 @@ int main() {
 
 		double deltaTime	= currTime - prevTime;
 
-		float moveDelta		= deltaTime * 10.f;
+		float moveDelta		= deltaTime * 5.f;
 
 		glfwPollEvents();
 		

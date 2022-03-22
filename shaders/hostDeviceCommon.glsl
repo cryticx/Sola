@@ -9,8 +9,8 @@
 
 #define SR_MAX_TEX_DESC	((uint16_t) 1024)
 
-#define SR_CLIP_NEAR	((float) 0.001f)
-#define SR_CLIP_FAR		((float) 1024.f)
+#define SR_CLIP_NEAR	((float) 0.01f)
+#define SR_CLIP_FAR		((float) 512.f)
 
 #define SR_MAX_BLAS		((uint8_t) 32)
 
@@ -39,7 +39,7 @@ typedef enum SrDescriptorBindPoints {
 #extension GL_EXT_shader_explicit_arithmetic_types_int32 : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
 
-const float	clipNear	= 0.001f;
+const float	clipNear	= 0.01f;
 const float	clipFar		= 512.f;
 
 const uint	asBind		= 0;

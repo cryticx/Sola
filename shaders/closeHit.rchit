@@ -106,11 +106,13 @@ void main() {
 	
 	const vec3			objPos			= vertices[0].pos * barycentrics.x + vertices[1].pos * barycentrics.y + vertices[2].pos * barycentrics.z;
 	const vec3			objNorm			= normalize(vertices[0].norm * barycentrics.x + vertices[1].norm * barycentrics.y + vertices[2].norm * barycentrics.z);
-	
+
 	const vec3			worldPos		= vec3(gl_ObjectToWorldEXT * vec4(objPos, 1.f));
 	const vec3			worldNorm		= normalize(vec3(objNorm * gl_WorldToObjectEXT));
 
-	const float			rayConeRadius	= gl_HitTEXT * payload.raySpreadAngle;
+	payload.totalDistance				+= gl_HitTEXT;
+
+	const float			rayConeRadius	= payload.totalDistance * payload.raySpreadAngle;
 
 	const vec2			texUV			= vertices[0].texUV * barycentrics.x + vertices[1].texUV * barycentrics.y + vertices[2].texUV * barycentrics.z;
 
@@ -142,7 +144,7 @@ void main() {
 
 			shadowPayload.isShadowed	= true;
 
-			traceRayEXT(topLevelAS, rayFlags, 0xFF, 0, 0, 1, worldPos, 0.0001f, L, lightDist, 1); //TODO figure out how to better integrate shadow-termination w/ normal attenuation
+			traceRayEXT(topLevelAS, rayFlags, 0xFF, 0, 0, 1, worldPos, 0.001f, L, lightDist, 1);
 
 			if (!shadowPayload.isShadowed) {
 				const vec3	V			= -gl_WorldRayDirectionEXT;
@@ -158,19 +160,14 @@ void main() {
 			}
 		}
 	}
-	payload.recursionDepth++;
+	const vec3	R		= reflect(gl_WorldRayDirectionEXT, worldNorm);
+	const vec3	V		= -gl_WorldRayDirectionEXT;
+	const vec3	H		= normalize(V + R);
 
-	if (mat.roughFactor < 0.1f && payload.recursionDepth < uint8_t(2)) { //TODO make reflections properly utilize roughness
-		const vec3	L		= reflect(gl_WorldRayDirectionEXT, worldNorm);
-		const vec3	V		= -gl_WorldRayDirectionEXT;
-		const vec3	H		= normalize(V + L);
+	const float	VdotH	= max(dot(V, H), 0.f);
 
-		traceRayEXT(topLevelAS, gl_RayFlagsNoneEXT, 0xFF, 0, 0, 0, worldPos, 0.0001f, L, clipFar - gl_HitTEXT, 0);
-
-		const float	VdotH	= max(dot(V, H), 0.f);
-
-		payload.hitColor	= payload.hitColor * Fresnel(VdotH, mat.metalFactor, mat.colorFactor) * (1.f - 10.f * mat.roughFactor) + occludeTex * irradiance + mat.emissiveFactor;
-	}
-	else
-		payload.hitColor = occludeTex * irradiance + mat.emissiveFactor;
+	payload.worldPos	= worldPos;
+	payload.worldNorm	= worldNorm;
+	payload.hitColor	= occludeTex * irradiance + mat.emissiveFactor;
+	payload.attenuation	*= Fresnel(VdotH, mat.metalFactor, mat.colorFactor) * max(1.f - 10.f * mat.roughFactor, 0.f);
 }

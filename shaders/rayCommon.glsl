@@ -1,13 +1,17 @@
 #ifndef RAY_COMMON
 #define RAY_COMMON
 
-#extension GL_EXT_shader_explicit_arithmetic_types_int8 : require
+#include "hostDeviceCommon.glsl"
 
 struct PrimaryPayload {
-	vec3	hitColor;
+	float	totalDistance;
 	float	raySpreadAngle;
 
-	uint8_t	recursionDepth;
+	vec3	worldPos;
+	vec3	worldNorm;
+
+	vec3	hitColor;
+	vec3	attenuation; // fresnel * roughness attenuation
 };
 struct ShadowPayload {
 	bool isShadowed;

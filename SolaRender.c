@@ -619,7 +619,7 @@ void createLogicalDevice(SolaRender* engine) {
 	engine->vkGetRayTracingShaderGroupHandlesKHR		= (PFN_vkGetRayTracingShaderGroupHandlesKHR)		vkGetDeviceProcAddr(engine->device, "vkGetRayTracingShaderGroupHandlesKHR");
 	engine->vkCmdTraceRaysKHR							= (PFN_vkCmdTraceRaysKHR)							vkGetDeviceProcAddr(engine->device, "vkCmdTraceRaysKHR");
 }
-void initializeGeometry(SolaRender* engine) {
+void initializeGeometry(SolaRender* engine) { //TODO parallelize scene-loading
 	// Geometry and bottom-level acceleration structure
 	VkAccelerationStructureGeometryKHR*				geometries;
 	VkAccelerationStructureBuildRangeInfoKHR*		rangeInfos;
@@ -639,8 +639,6 @@ void initializeGeometry(SolaRender* engine) {
 		CGLTF_CHECK(cgltf_parse_file(&sceneOptions, "models/Sponza.glb",			&sceneData[0]))
 		CGLTF_CHECK(cgltf_parse_file(&sceneOptions, "models/DamagedHelmet.glb",		&sceneData[1]))
 
-		engine->textureImageCount		= 1; // first texure is a default, white texture
-
 		uint8_t			materialCount	= 0;
 		uint8_t			primitiveCount	= 0;
 		VkDeviceSize	indexBufferSize = 0;
@@ -659,8 +657,6 @@ void initializeGeometry(SolaRender* engine) {
 		uint8_t idxMesh = 0;
 
 		for (uint8_t idxScene = 0; idxScene < sizeof(sceneData) / sizeof(void*); idxScene++) {
-			engine->textureImageCount	+= sceneData[idxScene]->textures_count;
-
 			materialCount				+= sceneData[idxScene]->materials_count;
 
 			for (uint8_t idxSceneMesh = 0; idxSceneMesh < sceneData[idxScene]->meshes_count; idxSceneMesh++) {
@@ -719,6 +715,8 @@ void initializeGeometry(SolaRender* engine) {
 			fprintf(stderr, "Failed to allocate host memory!\n");
 			exit(1);
 		}
+		engine->textureImageCount = 1;
+
 		// Default white texture
 		{
 			ktxTextureCreateInfo textureInfo = {
@@ -742,13 +740,11 @@ void initializeGeometry(SolaRender* engine) {
 			
 			ktxTexture_Destroy((ktxTexture*) texture);
 		}
-
 		char* indexSlice = indices;
 
 		idxMesh = 0;
 
 		uint32_t	idxVert		= 0;
-		uint16_t	idxTexture	= 1;
 		uint8_t		idxMaterial	= 0;
 
 		for (uint8_t idxScene = 0; idxScene < sizeof(sceneData) / sizeof(void*); idxScene++) {
@@ -768,27 +764,10 @@ void initializeGeometry(SolaRender* engine) {
 				}
 				else
 					for (uint32_t idxSceneVert = 0; idxSceneVert < perMeshData[idxMesh].vertexCount; idxSceneVert++)
-						memcpy(vertices[idxVert + idxSceneVert].texUV, (vec2) {0, 0}, sizeof(vec2));
+						memcpy(vertices[idxVert + idxSceneVert].texUV, (vec2) {0.f, 0.f}, sizeof(vec2));
 
 				idxVert += perMeshData[idxMesh].vertexCount;
 				idxMesh++;
-			}
-			for (uint16_t idxSceneTexture = 0; idxSceneTexture < sceneData[idxScene]->textures_count; idxSceneTexture++) {
-				ktxTexture2* texture;
-
-				KTX_CHECK(ktxTexture2_CreateFromMemory(sceneData[idxScene]->bin + sceneData[idxScene]->textures[idxSceneTexture].basisu_image->buffer_view->offset,
-						sceneData[idxScene]->textures[idxSceneTexture].basisu_image->buffer_view->size, KTX_TEXTURE_CREATE_LOAD_IMAGE_DATA_BIT, &texture))
-
-				KTX_CHECK(ktxTexture2_TranscodeBasis(texture, KTX_TTF_BC7_RGBA, 0))
-
-				engine->textureImages[idxTexture] = createImage(engine, texture->numLevels, VK_FORMAT_BC7_SRGB_BLOCK, (VkExtent2D) { texture->baseWidth, texture->baseHeight },
-					VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, (ktxTexture*) texture);
-
-				sceneData[idxScene]->textures[idxSceneTexture].extras.start_offset = idxTexture; // texture-reference for materials
-
-				ktxTexture_Destroy((ktxTexture*) texture);
-
-				idxTexture++;
 			}
 			for (uint8_t idxSceneMaterial = 0; idxSceneMaterial < sceneData[idxScene]->materials_count; idxSceneMaterial++) {
 				memcpy(materials[idxMaterial].baseMat.colorFactor,		sceneData[idxScene]->materials[idxSceneMaterial].pbr_metallic_roughness.base_color_factor,	sizeof(vec3));
@@ -797,23 +776,85 @@ void initializeGeometry(SolaRender* engine) {
 				materials[idxMaterial].baseMat.metalFactor = sceneData[idxScene]->materials[idxSceneMaterial].pbr_metallic_roughness.metallic_factor;
 				materials[idxMaterial].baseMat.roughFactor = sceneData[idxScene]->materials[idxSceneMaterial].pbr_metallic_roughness.roughness_factor;
 
-				if (sceneData[idxScene]->materials[idxSceneMaterial].pbr_metallic_roughness.base_color_texture.texture)
-					materials[idxMaterial].colorTexIdx = sceneData[idxScene]->materials[idxSceneMaterial].pbr_metallic_roughness.base_color_texture.texture->extras.start_offset;
+				ktxTexture2* texture;
+
+				if (sceneData[idxScene]->materials[idxSceneMaterial].pbr_metallic_roughness.base_color_texture.texture) {
+					KTX_CHECK(ktxTexture2_CreateFromMemory(
+						sceneData[idxScene]->bin + sceneData[idxScene]->materials[idxSceneMaterial].pbr_metallic_roughness.base_color_texture.texture->basisu_image->buffer_view->offset,
+						sceneData[idxScene]->materials[idxSceneMaterial].pbr_metallic_roughness.base_color_texture.texture->basisu_image->buffer_view->size,
+						KTX_TEXTURE_CREATE_LOAD_IMAGE_DATA_BIT, &texture))
+
+					KTX_CHECK(ktxTexture2_TranscodeBasis(texture, KTX_TTF_BC7_RGBA, 0))
+
+					engine->textureImages[engine->textureImageCount] = createImage(engine, texture->numLevels, VK_FORMAT_BC7_SRGB_BLOCK, (VkExtent2D) { texture->baseWidth, texture->baseHeight },
+						VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, (ktxTexture*) texture);
+
+					ktxTexture_Destroy((ktxTexture*) texture);
+
+					materials[idxMaterial].colorTexIdx = engine->textureImageCount;
+
+					engine->textureImageCount++;
+				}
 				else
 					materials[idxMaterial].colorTexIdx = 0;
 
-				if (sceneData[idxScene]->materials[idxSceneMaterial].pbr_metallic_roughness.metallic_roughness_texture.texture)
-					materials[idxMaterial].pbrTexIdx = sceneData[idxScene]->materials[idxSceneMaterial].pbr_metallic_roughness.metallic_roughness_texture.texture->extras.start_offset;
+				if (sceneData[idxScene]->materials[idxSceneMaterial].pbr_metallic_roughness.metallic_roughness_texture.texture) {
+					KTX_CHECK(ktxTexture2_CreateFromMemory(
+						sceneData[idxScene]->bin + sceneData[idxScene]->materials[idxSceneMaterial].pbr_metallic_roughness.metallic_roughness_texture.texture->basisu_image->buffer_view->offset,
+						sceneData[idxScene]->materials[idxSceneMaterial].pbr_metallic_roughness.metallic_roughness_texture.texture->basisu_image->buffer_view->size,
+						KTX_TEXTURE_CREATE_LOAD_IMAGE_DATA_BIT, &texture))
+
+					KTX_CHECK(ktxTexture2_TranscodeBasis(texture, KTX_TTF_BC7_RGBA, 0))
+
+					engine->textureImages[engine->textureImageCount] = createImage(engine, texture->numLevels, VK_FORMAT_BC7_SRGB_BLOCK, (VkExtent2D) { texture->baseWidth, texture->baseHeight },
+						VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, (ktxTexture*) texture);
+
+					ktxTexture_Destroy((ktxTexture*) texture);
+
+					materials[idxMaterial].pbrTexIdx = engine->textureImageCount;
+
+					engine->textureImageCount++;
+				}
 				else
 					materials[idxMaterial].pbrTexIdx = 0;
 
-				if (sceneData[idxScene]->materials[idxSceneMaterial].emissive_texture.texture)
-					materials[idxMaterial].emissiveTexIdx = sceneData[idxScene]->materials[idxSceneMaterial].emissive_texture.texture->extras.start_offset;
+				if (sceneData[idxScene]->materials[idxSceneMaterial].emissive_texture.texture) {
+					KTX_CHECK(ktxTexture2_CreateFromMemory(
+						sceneData[idxScene]->bin + sceneData[idxScene]->materials[idxSceneMaterial].emissive_texture.texture->basisu_image->buffer_view->offset,
+						sceneData[idxScene]->materials[idxSceneMaterial].emissive_texture.texture->basisu_image->buffer_view->size,
+						KTX_TEXTURE_CREATE_LOAD_IMAGE_DATA_BIT, &texture))
+
+					KTX_CHECK(ktxTexture2_TranscodeBasis(texture, KTX_TTF_BC7_RGBA, 0))
+
+					engine->textureImages[engine->textureImageCount] = createImage(engine, texture->numLevels, VK_FORMAT_BC7_SRGB_BLOCK, (VkExtent2D) { texture->baseWidth, texture->baseHeight },
+						VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, (ktxTexture*) texture);
+
+					ktxTexture_Destroy((ktxTexture*) texture);
+
+					materials[idxMaterial].emissiveTexIdx = engine->textureImageCount;
+
+					engine->textureImageCount++;
+				}
 				else
 					materials[idxMaterial].emissiveTexIdx = 0;
 
-				if (sceneData[idxScene]->materials[idxSceneMaterial].occlusion_texture.texture)
-					materials[idxMaterial].occludeTexIdx = sceneData[idxScene]->materials[idxSceneMaterial].occlusion_texture.texture->extras.start_offset;
+				if (sceneData[idxScene]->materials[idxSceneMaterial].occlusion_texture.texture) {
+					KTX_CHECK(ktxTexture2_CreateFromMemory(
+						sceneData[idxScene]->bin + sceneData[idxScene]->materials[idxSceneMaterial].occlusion_texture.texture->basisu_image->buffer_view->offset,
+						sceneData[idxScene]->materials[idxSceneMaterial].occlusion_texture.texture->basisu_image->buffer_view->size,
+						KTX_TEXTURE_CREATE_LOAD_IMAGE_DATA_BIT, &texture))
+
+					KTX_CHECK(ktxTexture2_TranscodeBasis(texture, KTX_TTF_BC7_RGBA, 0))
+
+					engine->textureImages[engine->textureImageCount] = createImage(engine, texture->numLevels, VK_FORMAT_BC7_SRGB_BLOCK, (VkExtent2D) { texture->baseWidth, texture->baseHeight },
+						VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, (ktxTexture*) texture);
+
+					ktxTexture_Destroy((ktxTexture*) texture);
+
+					materials[idxMaterial].occludeTexIdx = engine->textureImageCount;
+
+					engine->textureImageCount++;
+				}
 				else
 					materials[idxMaterial].occludeTexIdx = 0;
 

@@ -10,7 +10,7 @@
 
 #define SR_MAX_SWAP_IMGS		((uint8_t) 3)
 #define SR_MAX_QUEUED_FRAMES	((uint8_t) 2)
-#define SR_MAX_RAY_RECURSION	((uint8_t) 3)
+#define SR_MAX_RAY_RECURSION	((uint8_t) 2)
 
 typedef struct VulkanBuffer {
 	VkBuffer		buffer;
@@ -18,12 +18,12 @@ typedef struct VulkanBuffer {
 } VulkanBuffer;
 
 typedef struct VulkanImage {
-	VkImage						image;
-	VkDeviceMemory				memory;
-	VkImageView					view;
+	VkImage			image;
+	VkDeviceMemory	memory;
+	VkImageView		view;
 } VulkanImage;
 
-typedef struct SolaRender { //TODO coalesce Vulkan buffers and sub-allocate
+typedef struct SolaRender { //TODO coalesce Vulkan buffers and sub-allocate?
 	VkInstance					instance;
 
 	GLFWwindow*					window;

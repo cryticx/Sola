@@ -6,7 +6,7 @@
 #include "hostDeviceCommon.glsl"
 #include "rayCommon.glsl"
 
-layout(location = 0)				rayPayloadEXT PrimaryPayload		primaryPayload;
+layout(location = 0)				rayPayloadEXT PrimaryPayload		payload;
 
 layout(binding = asBind)			uniform accelerationStructureEXT	topLevelAS;
 layout(binding = imgBind, rgba16f)	uniform image2D						image;
@@ -22,10 +22,28 @@ void main() {
 	const vec3 targetUnit	= normalize(target.xyz);
 	const vec4 direction	= rayGenUniform.viewInverse * vec4(targetUnit, 0.f);
 
-	primaryPayload.raySpreadAngle = 2.f * -targetUnit.z * -rayGenUniform.projInverse[1][1] / gl_LaunchSizeEXT.y;
-	primaryPayload.recursionDepth = uint8_t(0);
+	payload.raySpreadAngle	= 2.f * targetUnit.z * rayGenUniform.projInverse[1][1] / gl_LaunchSizeEXT.y;
+	payload.totalDistance	= 0.f;
+	payload.attenuation		= vec3(1.f);
 
-	traceRayEXT(topLevelAS, gl_RayFlagsNoneEXT, 0xFF, 0, 0, 0, origin.xyz, clipNear, direction.xyz, clipFar, 0);
+	traceRayEXT(topLevelAS, gl_RayFlagsNoneEXT, 0xFF, 0, 0, 0, origin.xyz, clipNear, direction.xyz, clipFar, 0); // primary hit
 
-	imageStore(image, ivec2(gl_LaunchIDEXT.xy), vec4(primaryPayload.hitColor / (vec3(1.f) + primaryPayload.hitColor), 0.f)); // store w/ Reinhard tone-mapping
+	vec3 color				= payload.hitColor;
+
+	uint8_t	reflectCount	= uint8_t(0);
+
+	while (length(payload.attenuation) > 0.01f && reflectCount < uint8_t(3)) { // reflection TODO implement rough reflections
+		const vec3	R			= reflect(direction.xyz, payload.worldNorm);
+
+		const vec3	attenuation	= payload.attenuation;
+
+		traceRayEXT(topLevelAS, gl_RayFlagsNoneEXT, 0xFF, 0, 0, 0, payload.worldPos, 0.001f, R, clipFar, 0);
+
+		color += payload.hitColor * attenuation;
+
+		reflectCount++;
+	}
+	const vec3 mappedColor = color / (vec3(1.f) + color); // Reinhard tone-mapping
+
+	imageStore(image, ivec2(gl_LaunchIDEXT.xy), vec4(mappedColor, 0.f));
 }
