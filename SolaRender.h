@@ -9,6 +9,7 @@
 #include "shaders/hostDeviceCommon.glsl"
 
 #define SR_MAX_SWAP_IMGS		((uint8_t) 3)
+#define SR_MAX_THREADS			((uint8_t) 32)
 #define SR_MAX_QUEUED_FRAMES	((uint8_t) 2)
 #define SR_MAX_RAY_RECURSION	((uint8_t) 2)
 
@@ -39,7 +40,9 @@ typedef struct SolaRender { //TODO coalesce Vulkan buffers and sub-allocate?
 	uint32_t					swapImgCount;
 	VkSwapchainKHR				swapchain;
 
-	VkCommandPool				renderCmdPool, transientCommandPool;
+	uint8_t						threadCount;
+
+	VkCommandPool				renderCmdPool, transCmdPool;
 	VkCommandBuffer				renderCmdBuffers[SR_MAX_SWAP_IMGS], accelStructBuildCmdBuffer;
 	VkFence						accelStructBuildCmdBufferFence;
 	VulkanBuffer				accelStructBuildScratchBuffer;
@@ -56,7 +59,9 @@ typedef struct SolaRender { //TODO coalesce Vulkan buffers and sub-allocate?
 	VulkanBuffer				materialBuffer;
 
 	VkSampler					textureSampler;
-	VulkanImage					textureImages[SR_MAX_TEX_DESC];
+	VkImage						textureImages[SR_MAX_TEX_DESC];
+	VkImageView					textureImageViews[SR_MAX_TEX_DESC];
+	VkDeviceMemory				textureMemory;
 	uint16_t					textureImageCount;
 
 	PushConstants				pushConstants;
@@ -98,7 +103,7 @@ typedef struct SolaRender { //TODO coalesce Vulkan buffers and sub-allocate?
 	PFN_vkCmdTraceRaysKHR							vkCmdTraceRaysKHR;
 } SolaRender;
 
-__attribute__ ((cold))	void srCreateEngine		(SolaRender* engine, GLFWwindow* window);
+__attribute__ ((cold))	void srCreateEngine		(SolaRender* engine, GLFWwindow* window, uint8_t coreCount);
 
 __attribute__ ((hot))	void srRenderFrame		(SolaRender* engine);
 

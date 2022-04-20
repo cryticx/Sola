@@ -3,6 +3,8 @@
 #include <math.h>
 #include <stdio.h>
 
+#include <sys/sysinfo.h>
+
 #define likely(x)	__builtin_expect((x), 1)
 
 int main() {
@@ -19,7 +21,7 @@ int main() {
 	glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
 	glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
 	
-	srCreateEngine(&renderEngine, glfwCreateWindow(1920, 1080, "Sola", NULL, NULL));
+	srCreateEngine(&renderEngine, glfwCreateWindow(1920, 1080, "Sola", NULL, NULL), get_nprocs());
 
 	glfwSetInputMode(renderEngine.window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
 	

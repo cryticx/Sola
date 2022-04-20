@@ -17,7 +17,7 @@ void main() {
 	const vec2 inUV			= pixelCenter / vec2(gl_LaunchSizeEXT.xy);
 	const vec2 d			= inUV * 2.f - 1.f;
 
-	const vec4 origin		= rayGenUniform.viewInverse * vec4(0.f, 0.f, 0.f, 1.f);
+	const vec4 origin		= rayGenUniform.viewInverse * vec4(0.f, 0.f, 0.f, 1.f); //TODO set origin to 0 and transform directly from object to camera?
 	const vec4 target		= rayGenUniform.projInverse * vec4(d.x, d.y, 1.f, 1.f);
 	const vec3 targetUnit	= normalize(target.xyz);
 	const vec4 direction	= rayGenUniform.viewInverse * vec4(targetUnit, 0.f);
