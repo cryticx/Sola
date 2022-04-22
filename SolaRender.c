@@ -706,12 +706,7 @@ void initializeGeometry(SolaRender* engine) {
 		idxMesh = 0;
 
 		uint32_t	idxVert		= 0;
-/*
-0.001661 seconds for vertices
-0.282657 seconds for texture transcoding
-0.038228 seconds for texture image creation
-0.000637 seconds for accelStructs
-*/
+
 		for (uint8_t idxScene = 0; idxScene < sizeof(sceneData) / sizeof(void*); idxScene++) { // Interleaving vertex data
 			for (uint8_t idxSceneMesh = 0; idxSceneMesh < sceneData[idxScene]->meshes_count; idxSceneMesh++) {
 				memcpy(indexSlice, perMeshData[idxMesh].indexAddr, perMeshData[idxMesh].indexBufferSize);

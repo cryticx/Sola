@@ -24,7 +24,7 @@ typedef struct VulkanImage {
 	VkImageView		view;
 } VulkanImage;
 
-typedef struct SolaRender { //TODO coalesce Vulkan buffers and sub-allocate?
+typedef struct SolaRender {
 	VkInstance					instance;
 
 	GLFWwindow*					window;
