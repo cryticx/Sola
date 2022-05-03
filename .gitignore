@@ -11,6 +11,7 @@
 !*.glsl
 !*.rgen
 !*.rchit
+!*.rahit
 !*.rmiss
 !*.glb
 !*.png

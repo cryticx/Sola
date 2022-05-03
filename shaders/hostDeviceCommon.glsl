@@ -24,12 +24,12 @@ typedef		struct Material			Material;
 typedef		struct MaterialInfo		MaterialInfo;
 
 typedef enum SrDescriptorBindPoints {
-    SR_DESC_BIND_PT_AS		= 0,
-    SR_DESC_BIND_PT_IMG		= 1,
-    SR_DESC_BIND_PT_GEN		= 2,
-    SR_DESC_BIND_PT_HIT		= 3,
-    SR_DESC_BIND_PT_SAMP	= 4,
-    SR_DESC_BIND_PT_TEX		= 5
+    SR_DESC_BIND_PT_TLAS		= 0,
+    SR_DESC_BIND_PT_STOR_IMG	= 1,
+    SR_DESC_BIND_PT_UNI_GEN		= 2,
+    SR_DESC_BIND_PT_UNI_HIT		= 3,
+    SR_DESC_BIND_PT_SAMP		= 4,
+    SR_DESC_BIND_PT_TEX			= 5
 } SrDescriptorBindPoints;
 
 #else
@@ -42,10 +42,10 @@ typedef enum SrDescriptorBindPoints {
 const float	clipNear	= 0.01f;
 const float	clipFar		= 512.f;
 
-const uint	asBind		= 0;
-const uint	imgBind		= 1;
-const uint	genBind		= 2;
-const uint	hitBind		= 3;
+const uint	tlasBind	= 0;
+const uint	storImgBind	= 1;
+const uint	uniGenBind	= 2;
+const uint	uniHitBind	= 3;
 const uint	sampBind	= 4;
 const uint	texBind		= 5;
 
@@ -87,22 +87,20 @@ struct PushConstants {
 struct Vertex {
 	vec3			pos;
 	vec3			norm;
+	vec3			tang;
 	vec2			texUV;
 };
 struct Material {
+	// base factors
 	vec3			colorFactor;
 	vec3			emissiveFactor;
 	float			metalFactor;
 	float			roughFactor;
-};
-struct MaterialInfo {
-	// base factors
-	Material		baseMat;
 
 	// alpha
 	float			alphaCutoff;
 	
-	// index offsets
+	// texture indices
 	uint16_t		colorTexIdx;
 	uint16_t		emissiveTexIdx;
 	uint16_t		occludeTexIdx;

@@ -2,7 +2,7 @@
 
 ## About
 
-A personal playground for trying/testing out various ray-tracing techniques. It utilizes the Khronos hardware-accelerated ray-tracing extensions, and currently supports hard-shadows, metallic-roughness PBR, ray-cone texture LOD, alpha-masked transparency, and simple reflections.
+A personal playground for trying/testing out various ray-tracing techniques. It utilizes the Khronos hardware-accelerated ray-tracing extensions, and currently supports hard-shadows, metallic-roughness PBR, ray-cone texture LOD, alpha-masked transparency, and rough reflections.
 
 ## Models
 

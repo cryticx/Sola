@@ -9,5 +9,5 @@ layout(location = 0) rayPayloadInEXT PrimaryPayload payload;
 
 void main() {
     payload.hitColor	= vec3(0.001f);
-    payload.attenuation	= vec3(0.f);
+    payload.coherence	= 0.f;
 }

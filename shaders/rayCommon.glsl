@@ -7,11 +7,14 @@ struct PrimaryPayload {
 	float	totalDistance;
 	float	raySpreadAngle;
 
-	vec3	worldPos;
-	vec3	worldNorm;
+	uint	seed;
+
+	vec3	position;
+	vec3	direction;		// reflection direction
 
 	vec3	hitColor;
-	vec3	attenuation; // fresnel * roughness attenuation
+	vec3	attenuation;	// Fresnel attenuation
+	float	coherence;		// perceptual roughness accumulated across hits
 };
 struct ShadowPayload {
 	bool isShadowed;

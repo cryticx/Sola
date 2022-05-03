@@ -27,7 +27,7 @@
 #define CGLTF_CHECK(x) { \
 	int result = (x); \
 	if (unlikely(result != 0)) \
-		SR_PRINT_ERROR("cglTF", result) \
+		SR_PRINT_ERROR("cgltf", result) \
 }
 #define KTX_CHECK(x) { \
 	int result = (x); \
@@ -67,7 +67,7 @@ VkCommandBuffer createTransientCmdBuffer(SolaRender* engine) { // Returns a sing
 	
 	return cmdBuffer;
 }
-void flushTransientCmdBuffer(SolaRender* engine, VkCommandBuffer cmdBuffer) { // Executes, waits, then frees cmdBuffer
+void flushTransientCmdBuffer(SolaRender* engine, VkCommandBuffer cmdBuffer) { // Executes, waits, then frees transient cmdBuffer
 	VK_CHECK(vkEndCommandBuffer(cmdBuffer))
 	
 	VkFence fence;
@@ -359,7 +359,7 @@ void selectPhysicalDevice(SolaRender* engine) {
 		fprintf(stderr, "Limiting queried devices to %u\n", physDeviceCount);
 	}
 	VK_CHECK(vkEnumeratePhysicalDevices(engine->instance, &physDeviceCount, physicalDevices))
-	
+
 	VkPhysicalDeviceRayTracingPipelineFeaturesKHR rayTracePipelineFeatures = {
 		.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_FEATURES_KHR
 	};
@@ -439,13 +439,13 @@ void createLogicalDevice(SolaRender* engine) {
 			.queueFamilyIndex	= engine->queueFamilyIndex
 		};
 		VkPhysicalDeviceRayTracingPipelineFeaturesKHR rayTracePipelineFeatures = {
-			.sType				= VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_FEATURES_KHR,
-			.rayTracingPipeline	= 1
+			.sType								= VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_FEATURES_KHR,
+			.rayTracingPipeline					= 1
 		};
 		VkPhysicalDeviceAccelerationStructureFeaturesKHR accelStructFeatures = {
-			.sType					= VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR,
-			.pNext					= &rayTracePipelineFeatures,
-			.accelerationStructure	= 1
+			.sType								= VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR,
+			.pNext								= &rayTracePipelineFeatures,
+			.accelerationStructure				= 1
 		};
 		VkPhysicalDeviceVulkan12Features vulkan12Features = {
 			.sType								= VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES,
@@ -458,21 +458,21 @@ void createLogicalDevice(SolaRender* engine) {
 			.bufferDeviceAddress				= 1
 		};
 		VkPhysicalDeviceVulkan11Features vulkan11Features = {
-			.sType						= VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES,
-			.pNext						= &vulkan12Features,
-			.storageBuffer16BitAccess	= 1
+			.sType								= VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES,
+			.pNext								= &vulkan12Features,
+			.storageBuffer16BitAccess			= 1
 		};
 		VkPhysicalDeviceFeatures2 features2 = {
-			.sType							= VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
-			.pNext							= &vulkan11Features,
-			.features.samplerAnisotropy		= 1,
-			.features.shaderInt64			= 1,
-			.features.shaderInt16			= 1,
-			.features.textureCompressionBC	= 1
+			.sType								= VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
+			.pNext								= &vulkan11Features,
+			.features.samplerAnisotropy			= 1,
+			.features.shaderInt64				= 1,
+			.features.shaderInt16				= 1,
+			.features.textureCompressionBC		= 1
 		};
 		const char* const deviceExtensions[] = {
 			VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME, VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME,
-			VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME,  VK_KHR_SWAPCHAIN_EXTENSION_NAME
+			VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME, VK_KHR_SHADER_CLOCK_EXTENSION_NAME, VK_KHR_SWAPCHAIN_EXTENSION_NAME
 		};
 		VkDeviceCreateInfo deviceCreateInfo = {
 			.sType						= VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
@@ -535,22 +535,22 @@ void createLogicalDevice(SolaRender* engine) {
 			.pBindingFlags	= (VkDescriptorBindingFlags[6]) { [5] = VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT }
 		};
 		VkDescriptorSetLayoutBinding descSetLayoutBinds[6] = {
-			[0].binding				= SR_DESC_BIND_PT_AS,
+			[0].binding				= SR_DESC_BIND_PT_TLAS,
 			[0].descriptorType		= VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR,
 			[0].descriptorCount		= 1,
 			[0].stageFlags			= VK_SHADER_STAGE_RAYGEN_BIT_KHR | VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR,
 			
-			[1].binding				= SR_DESC_BIND_PT_IMG,
+			[1].binding				= SR_DESC_BIND_PT_STOR_IMG,
 			[1].descriptorType		= VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
 			[1].descriptorCount		= 1,
 			[1].stageFlags			= VK_SHADER_STAGE_RAYGEN_BIT_KHR,
 			
-			[2].binding				= SR_DESC_BIND_PT_GEN,
+			[2].binding				= SR_DESC_BIND_PT_UNI_GEN,
 			[2].descriptorType		= VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
 			[2].descriptorCount		= 1,
 			[2].stageFlags			= VK_SHADER_STAGE_RAYGEN_BIT_KHR,
 			
-			[3].binding				= SR_DESC_BIND_PT_HIT,
+			[3].binding				= SR_DESC_BIND_PT_UNI_HIT,
 			[3].descriptorType		= VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
 			[3].descriptorCount		= 1,
 			[3].stageFlags			= VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR | VK_SHADER_STAGE_ANY_HIT_BIT_KHR,
@@ -637,6 +637,7 @@ void initializeGeometry(SolaRender* engine) {
 			const void*	indexAddr;
 			const void*	posAddr;
 			const void*	normAddr;
+			const void* tangAddr;
 			const void*	texUVAddr;
 		} perMeshData[SR_MAX_BLAS];
 
@@ -652,7 +653,7 @@ void initializeGeometry(SolaRender* engine) {
 				primitiveCount	+= sceneData[idxScene]->meshes[idxSceneMesh].primitives_count;
 				indexBufferSize	+= perMeshData[idxMesh].indexBufferSize;
 
-				perMeshData[idxMesh].texUVAddr = 0; // textures are optional
+				perMeshData[idxMesh].tangAddr	= NULL; // tangents will be generated if missing
 
 				for (uint8_t idxAttr = 0; idxAttr < sceneData[idxScene]->meshes[idxSceneMesh].primitives[0].attributes_count; idxAttr++)
 					switch (sceneData[idxScene]->meshes[idxSceneMesh].primitives[0].attributes[idxAttr].type) {
@@ -684,7 +685,7 @@ void initializeGeometry(SolaRender* engine) {
 			+ engine->bottomAccelStructCount * (sizeof(void*) + sizeof(VkAccelerationStructureBuildGeometryInfoKHR) + sizeof(VkAccelerationStructureBuildSizesInfoKHR)
 			+ sizeof(VkAccelerationStructureCreateInfoKHR) + sizeof(VkAccelerationStructureInstanceKHR)));
 		
-		Vertex* vertices = malloc(vertexCount * sizeof(Vertex) + indexBufferSize + materialCount * sizeof(MaterialInfo) + primitiveCount * sizeof(uint32_t));
+		Vertex* vertices = malloc(vertexCount * sizeof(Vertex) + indexBufferSize + materialCount * sizeof(Material) + primitiveCount * sizeof(uint32_t));
 
 		rangeInfos				= (VkAccelerationStructureBuildRangeInfoKHR*)		(geometries			+ primitiveCount);
 		rangeInfosArray			= (VkAccelerationStructureBuildRangeInfoKHR**)		(rangeInfos			+ primitiveCount);
@@ -693,9 +694,9 @@ void initializeGeometry(SolaRender* engine) {
 		accelStructInfos		= (VkAccelerationStructureCreateInfoKHR*)			(sizesInfos			+ engine->bottomAccelStructCount);
 		accelStructInstances	= (VkAccelerationStructureInstanceKHR*)				(accelStructInfos	+ engine->bottomAccelStructCount);
 		
-		char*			indices		= (char*)			(vertices	+ vertexCount);
-		MaterialInfo*	materials	= (MaterialInfo*)	(indices	+ indexBufferSize);
-		uint32_t*		primCounts	= (uint32_t*)		(materials	+ materialCount);
+		char*		indices		= (char*)		(vertices	+ vertexCount);
+		Material*	materials	= (Material*)	(indices	+ indexBufferSize);
+		uint32_t*	primCounts	= (uint32_t*)	(materials	+ materialCount);
 		
 		if (unlikely(!geometries || !vertices)) {
 			fprintf(stderr, "Failed to allocate host memory!\n");
@@ -713,18 +714,10 @@ void initializeGeometry(SolaRender* engine) {
 
 				indexSlice += perMeshData[idxMesh].indexBufferSize;
 
-				// interleaving attributes
 				for (uint32_t idxSceneVert = 0; idxSceneVert < perMeshData[idxMesh].vertexCount; idxSceneVert++) {
 					memcpy(vertices[idxVert + idxSceneVert].pos,	perMeshData[idxMesh].posAddr	+ idxSceneVert * sizeof(vec3), sizeof(vec3));
 					memcpy(vertices[idxVert + idxSceneVert].norm,	perMeshData[idxMesh].normAddr	+ idxSceneVert * sizeof(vec3), sizeof(vec3));
-				}
-				if (perMeshData[idxMesh].texUVAddr) {
-					for (uint32_t idxSceneVert = 0; idxSceneVert < perMeshData[idxMesh].vertexCount; idxSceneVert++)
-						memcpy(vertices[idxVert + idxSceneVert].texUV, perMeshData[idxMesh].texUVAddr + idxSceneVert * sizeof(vec2), sizeof(vec2));
-				}
-				else {
-					for (uint32_t idxSceneVert = 0; idxSceneVert < perMeshData[idxMesh].vertexCount; idxSceneVert++)
-						memcpy(vertices[idxVert + idxSceneVert].texUV, (vec2) {0.f, 0.f}, sizeof(vec2));
+					memcpy(vertices[idxVert + idxSceneVert].texUV,	perMeshData[idxMesh].texUVAddr	+ idxSceneVert * sizeof(vec2), sizeof(vec2));
 				}
 				idxVert += perMeshData[idxMesh].vertexCount;
 				idxMesh++;
@@ -756,11 +749,11 @@ void initializeGeometry(SolaRender* engine) {
 
 		for (uint8_t idxScene = 0; idxScene < sizeof(sceneData) / sizeof(void*); idxScene++) { // Material setup, and collecting textures to transcode
 			for (uint16_t idxSceneMaterial = 0; idxSceneMaterial < sceneData[idxScene]->materials_count; idxSceneMaterial++) {
-				memcpy(materials[idxMaterial].baseMat.colorFactor,		sceneData[idxScene]->materials[idxSceneMaterial].pbr_metallic_roughness.base_color_factor,	sizeof(vec3));
-				memcpy(materials[idxMaterial].baseMat.emissiveFactor,	sceneData[idxScene]->materials[idxSceneMaterial].emissive_factor,							sizeof(vec3));
+				memcpy(materials[idxMaterial].colorFactor,		sceneData[idxScene]->materials[idxSceneMaterial].pbr_metallic_roughness.base_color_factor,	sizeof(vec3));
+				memcpy(materials[idxMaterial].emissiveFactor,	sceneData[idxScene]->materials[idxSceneMaterial].emissive_factor,							sizeof(vec3));
 
-				materials[idxMaterial].baseMat.metalFactor = sceneData[idxScene]->materials[idxSceneMaterial].pbr_metallic_roughness.metallic_factor;
-				materials[idxMaterial].baseMat.roughFactor = sceneData[idxScene]->materials[idxSceneMaterial].pbr_metallic_roughness.roughness_factor;
+				materials[idxMaterial].metalFactor = sceneData[idxScene]->materials[idxSceneMaterial].pbr_metallic_roughness.metallic_factor;
+				materials[idxMaterial].roughFactor = sceneData[idxScene]->materials[idxSceneMaterial].pbr_metallic_roughness.roughness_factor;
 
 				if (sceneData[idxScene]->materials[idxSceneMaterial].pbr_metallic_roughness.base_color_texture.texture) {
 					materials[idxMaterial].colorTexIdx = engine->textureImageCount;
@@ -976,7 +969,7 @@ void initializeGeometry(SolaRender* engine) {
 			VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
 			VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &engine->pushConstants.vertexAddr, vertices);
 		
-		engine->materialBuffer = createBuffer(engine, materialCount * sizeof(MaterialInfo),
+		engine->materialBuffer = createBuffer(engine, materialCount * sizeof(Material),
 			VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
 			&engine->pushConstants.materialAddr, materials);
 
@@ -1108,7 +1101,7 @@ void initializeGeometry(SolaRender* engine) {
 
 		engine->vkGetAccelerationStructureBuildSizesKHR(engine->device, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR, &buildGeometryInfos[0], &rangeInfos[0].primitiveCount, &sizesInfos[0]);
 		
-		if (unlikely(scratchSize < sizesInfos[0].accelerationStructureSize)) { // In the theoretical event that the max scratch size for BLASs isn't enough for the TLAS, handle it
+		if (unlikely(scratchSize < sizesInfos[0].accelerationStructureSize)) { // In the theoretical event that the max scratch size for BLASes isn't enough for the TLAS, handle it
 			VK_CHECK(vkWaitForFences(engine->device, 1, &engine->accelStructBuildCmdBufferFence, VK_TRUE, UINT64_MAX))
 
 			vkDestroyBuffer(engine->device, engine->accelStructBuildScratchBuffer.buffer, NULL);
@@ -1379,21 +1372,24 @@ void createRayTracingPipeline(SolaRender* engine) {
 		.layerCount = 1
 	};
 	{
-		VkDescriptorPoolSize descriptorPoolSizes[5] = {
+		VkDescriptorPoolSize descriptorPoolSizes[6] = {
 			[0].type			= VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR,
 			[0].descriptorCount	= engine->swapImgCount,
 			
 			[1].type			= VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
 			[1].descriptorCount	= engine->swapImgCount,
-			
-			[2].type			= VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+
+			[2].type			= VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
 			[2].descriptorCount	= engine->swapImgCount,
 			
 			[3].type			= VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
 			[3].descriptorCount	= engine->swapImgCount,
 			
-			[4].type			= VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
-			[4].descriptorCount	= engine->swapImgCount
+			[4].type			= VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+			[4].descriptorCount	= engine->swapImgCount,
+			
+			[5].type			= VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
+			[5].descriptorCount	= engine->swapImgCount
 		};
 		VkDescriptorPoolCreateInfo descriptorPoolCreateInfo = {
 			.sType			= VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
@@ -1438,28 +1434,28 @@ void createRayTracingPipeline(SolaRender* engine) {
 		VkWriteDescriptorSet descriptorSetWrite[5] = {
 			[0].sType			= VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
 			[0].pNext			= &descriptorAccelerationStructureInfo,
-			[0].dstBinding		= SR_DESC_BIND_PT_AS,
+			[0].dstBinding		= SR_DESC_BIND_PT_TLAS,
 			[0].descriptorCount	= 1,
 			[0].descriptorType	= VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR,
 			
 			[1].sType			= VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-			[1].dstBinding		= SR_DESC_BIND_PT_IMG,
+			[1].dstBinding		= SR_DESC_BIND_PT_STOR_IMG,
 			[1].descriptorCount	= 1,
 			[1].descriptorType	= VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
 			[1].pImageInfo		= &storageImageDescriptorInfo,
 			
 			[2].sType			= VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-			[2].dstBinding		= SR_DESC_BIND_PT_GEN,
+			[2].dstBinding		= SR_DESC_BIND_PT_UNI_GEN,
 			[2].descriptorCount	= 1,
 			[2].descriptorType	= VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
 			[2].pBufferInfo		= &rayGenUniformBufferInfo,
 			
 			[3].sType			= VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-			[3].dstBinding		= SR_DESC_BIND_PT_HIT,
+			[3].dstBinding		= SR_DESC_BIND_PT_UNI_HIT,
 			[3].descriptorCount	= 1,
 			[3].descriptorType	= VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
 			[3].pBufferInfo		= &rayHitUniformBufferInfo,
-			
+
 			[4].sType			= VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
 			[4].dstBinding		= SR_DESC_BIND_PT_TEX,
 			[4].descriptorCount	= engine->textureImageCount,
@@ -1562,7 +1558,7 @@ void createRayTracingPipeline(SolaRender* engine) {
 			
 			vkCmdBindPipeline(engine->renderCmdBuffers[x], VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, engine->rayTracePipeline);
 			vkCmdBindDescriptorSets(engine->renderCmdBuffers[x], VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, engine->pipelineLayout, 0, 1, &engine->descriptorSets[x], 0, NULL);
-			
+
 			vkCmdPushConstants(engine->renderCmdBuffers[x], engine->pipelineLayout, VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR | VK_SHADER_STAGE_ANY_HIT_BIT_KHR, 0, sizeof(PushConstants), &engine->pushConstants);
 			
 			engine->vkCmdTraceRaysKHR(engine->renderCmdBuffers[x], &genShaderSbt, &missShaderSbt, &hitShaderSbt, &callableShaderSbt, surfaceCapabilities.currentExtent.width, surfaceCapabilities.currentExtent.height, 1);
