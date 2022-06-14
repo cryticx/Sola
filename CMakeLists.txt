@@ -5,6 +5,8 @@ project(Sola LANGUAGES C)
 set(CMAKE_THREAD_PREFER_PTHREAD TRUE)
 set(THREADS_PREFER_PTHREAD_FLAG TRUE)
 
+set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} -fno-omit-frame-pointer -fsanitize=address,undefined")
+
 add_executable(Sola main.c SolaRender.c)
 
 find_package(Vulkan REQUIRED)

@@ -7,8 +7,6 @@ struct PrimaryPayload {
 	float	totalDistance;
 	float	raySpreadAngle;
 
-	uint	seed;
-
 	vec3	position;
 	vec3	direction;		// reflection direction
 

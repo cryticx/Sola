@@ -1,6 +1,6 @@
 *
 !shaders/
-!models/
+!assets/
 !screenshots/
 !.gitignore
 !CMakeLists.txt
@@ -13,5 +13,5 @@
 !*.rchit
 !*.rahit
 !*.rmiss
-!*.glb
+!*.ktx2
 !*.png

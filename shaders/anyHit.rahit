@@ -1,8 +1,8 @@
 #version 460
 
 #extension GL_EXT_ray_tracing : require
-#extension GL_EXT_scalar_block_layout : require
 #extension GL_EXT_buffer_reference2 : require
+#extension GL_EXT_scalar_block_layout : require
 #extension GL_GOOGLE_include_directive : require
 
 #include "hostDeviceCommon.glsl"
@@ -23,7 +23,7 @@ layout(buffer_reference, scalar)		readonly buffer Materials	{ Material	a[]; };
 void main() {
 	const vec3			barycentrics	= vec3(1.f - attribs.x - attribs.y, attribs.x, attribs.y);
 
-	const int			geometryIndex	= rayHitUniform.instanceOffsets[gl_InstanceID] + gl_GeometryIndexEXT;
+	const uint			geometryIndex	= rayHitUniform.instanceOffsets[gl_InstanceID] + gl_GeometryIndexEXT;
 
 	const u16vec3		indices			= Indices	(pushConstants.indexAddr	+	rayHitUniform.geometryOffsets[geometryIndex].index).a[gl_PrimitiveID];
 
@@ -35,8 +35,8 @@ void main() {
 
 	const vec2			texUV			= vertices[0].texUV * barycentrics.x + vertices[1].texUV * barycentrics.y + vertices[2].texUV * barycentrics.z;
 
-	const vec4			colorTex		= texture(sampler2D(textures[mat.colorTexIdx], texSampler), texUV);
+	const float			alpha			= texture(sampler2D(textures[mat.colorTexIdx], texSampler), texUV).a;
 
-	if (colorTex.w < mat.alphaCutoff) //TODO implement blend-transparency w/ cull mask?
+	if (alpha < mat.alphaCutoff)
 		ignoreIntersectionEXT;
 }

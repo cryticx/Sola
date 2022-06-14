@@ -12,6 +12,7 @@
 #define SR_MAX_THREADS			((uint8_t) 32)
 #define SR_MAX_QUEUED_FRAMES	((uint8_t) 2)
 #define SR_MAX_RAY_RECURSION	((uint8_t) 2)
+#define	SR_MAX_MIP_LEVELS		((uint8_t) 24)
 
 typedef struct VulkanBuffer {
 	VkBuffer		buffer;
@@ -103,7 +104,7 @@ typedef struct SolaRender {
 	PFN_vkCmdTraceRaysKHR							vkCmdTraceRaysKHR;
 } SolaRender;
 
-__attribute__ ((cold))	void srCreateEngine		(SolaRender* engine, GLFWwindow* window, uint8_t coreCount);
+__attribute__ ((cold))	void srCreateEngine		(SolaRender* engine, GLFWwindow* window, uint8_t threadCount);
 
 __attribute__ ((hot))	void srRenderFrame		(SolaRender* engine);
 

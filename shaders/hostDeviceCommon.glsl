@@ -12,7 +12,7 @@
 #define SR_CLIP_NEAR	((float) 0.01f)
 #define SR_CLIP_FAR		((float) 512.f)
 
-#define SR_MAX_BLAS		((uint8_t) 32)
+#define SR_MAX_BLAS		((uint8_t) 64)
 
 typedef		struct RayGenUniform	RayGenUniform;
 typedef		struct GeometryOffsets	GeometryOffsets;
@@ -51,7 +51,7 @@ const uint	texBind		= 5;
 
 const uint	maxTex		= 1024;
 
-const uint	SR_MAX_BLAS	= 32;
+const uint	SR_MAX_BLAS	= 64;
 
 #endif
 
@@ -68,13 +68,15 @@ struct GeometryOffsets {
 	uint8_t			material;
 };
 struct Light {
-	vec3			pos;
 	vec3			color;
+	vec3			pos;
+
+	float			radius;
 };
 struct RayHitUniform {
-	GeometryOffsets	geometryOffsets[128];
+	GeometryOffsets	geometryOffsets[255];
 
-	Light			lights[32];
+	Light			lights[16];
 	uint8_t			lightCount;
 
 	uint8_t			instanceOffsets[SR_MAX_BLAS];
@@ -103,7 +105,6 @@ struct Material {
 	// texture indices
 	uint16_t		colorTexIdx;
 	uint16_t		emissiveTexIdx;
-	uint16_t		occludeTexIdx;
 	uint16_t		pbrTexIdx;
 };
 

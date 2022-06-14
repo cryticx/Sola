@@ -12,20 +12,6 @@ layout(binding = tlasBind)				uniform accelerationStructureEXT	topLevelAS;
 layout(binding = storImgBind, rgba16f)	uniform image2D						storImg;
 layout(binding = uniGenBind)			uniform _RayGenUniform				{ RayGenUniform rayGenUniform; };
 
-// Generate a random unsigned int from two unsigned int values
-// Zafar 2010, "GPU Random Numbers via the Tiny Encryption Algorithm"
-uint tea(uint val0, uint val1) {
-	uint v0 = val0;
-	uint v1 = val1;
-	uint s0 = 0;
-
-	for(uint n = 0; n < 16; n++) {
-		s0 += 0x9e3779b9;
-		v0 += ((v1 << 4) + 0xa341316c) ^ (v1 + s0) ^ ((v1 >> 5) + 0xc8013ea4);
-		v1 += ((v0 << 4) + 0xad90777d) ^ (v0 + s0) ^ ((v0 >> 5) + 0x7e95761e);
-	}
-	return v0;
-}
 void main() {
 	const vec2	pixelCenter		= vec2(gl_LaunchIDEXT.xy) + vec2(0.5f);
 	const vec2	inUV			= pixelCenter / vec2(gl_LaunchSizeEXT.xy);
@@ -38,19 +24,18 @@ void main() {
 
 	payload.raySpreadAngle		= 2.f * targetUnit.z * rayGenUniform.projInverse[1][1] / gl_LaunchSizeEXT.y;
 	payload.totalDistance		= 0.f;
-	payload.seed				= tea(gl_LaunchIDEXT.x, gl_LaunchIDEXT.y);
 	payload.attenuation			= vec3(1.f);
 	payload.coherence			= 1.f;
 
 	traceRayEXT(topLevelAS, gl_RayFlagsNoneEXT, 0xFF, 0, 0, 0, origin.xyz, clipNear, direction.xyz, clipFar, 0); // primary hit
 
-	uint8_t	reflectCount	= uint8_t(0);
+	uint8_t	reflectCount		= uint8_t(0);
 
-	vec3	color			= payload.hitColor;
-	vec3	attenuation		= payload.attenuation;
+	vec3	color				= payload.hitColor;
+	vec3	attenuation			= payload.attenuation;
 
 	while (length(attenuation) > 0.002f && payload.coherence > 0.6f && reflectCount < uint8_t(2)) { // reflection TODO utilize glTF transmission
-		traceRayEXT(topLevelAS, gl_RayFlagsNoneEXT, 0xFF, 0, 0, 0, payload.position, 0.001f, payload.direction, clipFar - payload.totalDistance, 0);
+		traceRayEXT(topLevelAS, gl_RayFlagsNoneEXT, 0xFF, 0, 0, 0, payload.position, 0.001f, payload.direction, clipFar - payload.totalDistance, 0); //TODO variable reflection ray distances based on coherence?
 
 		color		+=	payload.hitColor * attenuation;
 		attenuation	=	payload.attenuation;

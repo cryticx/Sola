@@ -1,8 +1,8 @@
 #version 460
 
 #extension GL_EXT_ray_tracing : require
-#extension GL_EXT_scalar_block_layout : require
 #extension GL_EXT_buffer_reference2 : require
+#extension GL_EXT_scalar_block_layout : require
 #extension GL_GOOGLE_include_directive : require
 
 #include "hostDeviceCommon.glsl"
@@ -26,37 +26,6 @@ layout(buffer_reference, scalar)		readonly buffer Materials			{ Material	a[]; };
 
 const float PI = 3.14159265359f;
 
-// Generate a random unsigned int in [0, 2^24) given the previous RNG state using the Numerical Recipes linear congruential generator
-uint lcg(inout uint prev) {
-	uint LCG_A = 1664525u;
-	uint LCG_C = 1013904223u;
-	prev       = (LCG_A * prev + LCG_C);
-	return prev & 0x00FFFFFF;
-}
-// Generate a random float in [0, 1) given the previous RNG state
-float rnd(inout uint prev) {
-	return (float(lcg(prev)) / float(0x01000000));
-}
-// Randomly sampling around +Z
-vec3 samplingHemisphere(inout uint seed, in vec3 x, in vec3 y, in vec3 z) {
-	float r1 = rnd(seed);
-	float r2 = rnd(seed);
-	float sq = sqrt(1.f - r2);
-
-	vec3 direction	= vec3(cos(2.f * PI * r1) * sq, sin(2.f * PI * r1) * sq, sqrt(r2));
-	direction		= direction.x * x + direction.y * y + direction.z * z;
-
-	return direction;
-}
-// Return the tangent and binormal from the incoming normal
-void createCoordinateSystem(in vec3 N, out vec3 Nt, out vec3 Nb) {
-	if(abs(N.x) > abs(N.y))
-		Nt = vec3(N.z, 0, -N.x) / sqrt(N.x * N.x + N.z * N.z);
-	else
-		Nt = vec3(0, -N.z, N.y) / sqrt(N.y * N.y + N.z * N.z);
-
-	Nb = cross(N, Nt);
-}
 // Akenine-Möller et al. 2021, "Improved shader and texture level of detail using ray cones"
 vec2[2] AnisotropicEllipseAxesAkenineMoller(vec3 worldPos, vec3 worldNorm, vec3 rayDir, float coneRadius, Vertex vertices[3], vec2 texUV) {
 	const vec3	a1a			= rayDir - dot(worldNorm, rayDir) * worldNorm;
@@ -84,6 +53,18 @@ vec2[2] AnisotropicEllipseAxesAkenineMoller(vec3 worldPos, vec3 worldNorm, vec3 
 	const vec2	dPdy		= (1.f - u2 - v2) * vertices[0].texUV + u2 * vertices[1].texUV + v2 * vertices[2].texUV - texUV;
 
 	return vec2[2] (dPdx, dPdy);
+}
+// Duff et al. 2017, Building an Orthonormal Basis, Revisited
+void BranchlessONB(vec3 N, out vec3 Nt, out vec3 Nb) {
+    const float sign	= N.z >= 0.f ? 1.f : -1.f;
+
+    const float a		= -1.f / (sign + N.z);
+
+    const float b		= N.x * N.y * a;
+
+    Nt = vec3(1.f + sign * N.x * N.x * a, sign * b, -sign * N.x);
+
+    Nb = vec3(b, sign + N.y * N.y * a, -N.y);
 }
 // Heitz 2014, "Understanding the Masking-Shadowing Function in Microfacet-Based BRDFs"
 float DistributionGGX(float NdotH, float a) {
@@ -125,12 +106,10 @@ vec3 BRDF(float NdotL, float NdotV, float NdotH, float VdotH, float roughFactor,
 void main() {
 	const vec3			barycentrics	= vec3(1.f - attribs.x - attribs.y, attribs.x, attribs.y);
 
-	const int			geometryIndex	= rayHitUniform.instanceOffsets[gl_InstanceID] + gl_GeometryIndexEXT;
+	const uint			geometryIndex	= rayHitUniform.instanceOffsets[gl_InstanceID] + gl_GeometryIndexEXT;
 
 	const u16vec3		indices			= Indices	(pushConstants.indexAddr	+	rayHitUniform.geometryOffsets[geometryIndex].index).a[gl_PrimitiveID];
-
 	Vertices			pVertices		= Vertices	(pushConstants.vertexAddr	+	rayHitUniform.geometryOffsets[geometryIndex].vertex);
-
 	const Material		mat				= Materials	(pushConstants.materialAddr).a[	rayHitUniform.geometryOffsets[geometryIndex].material];
 	
 	const Vertex		vertices[3]		= Vertex[3](pVertices.a[indices.x], pVertices.a[indices.y], pVertices.a[indices.z]);
@@ -149,10 +128,15 @@ void main() {
 
 	const vec2			dPdxy[2]		= AnisotropicEllipseAxesAkenineMoller(objPos, objNorm, gl_ObjectRayDirectionEXT, rayConeRadius, vertices, texUV);
 
-	const vec3			colorTex		= vec3(	textureGrad(sampler2D(textures[mat.colorTexIdx		], texSampler), texUV, dPdxy[0], dPdxy[1]));
-	const vec3			emissiveTex		= vec3(	textureGrad(sampler2D(textures[mat.emissiveTexIdx	], texSampler), texUV, dPdxy[0], dPdxy[1]));
-	const float			occludeTex		= float(textureGrad(sampler2D(textures[mat.occludeTexIdx	], texSampler), texUV, dPdxy[0], dPdxy[1]));
-	const vec3			pbrTex			= vec3(	textureGrad(sampler2D(textures[mat.pbrTexIdx		], texSampler), texUV, dPdxy[0], dPdxy[1]));
+	const vec3			noiseShadowTex	= texelFetch(sampler2D(textures[1], texSampler), ivec2((gl_LaunchIDEXT.xy + 0) % 128), 0).rgb * 2.f - 1.f;
+	const vec3			noiseReflectTex	= texelFetch(sampler2D(textures[1], texSampler), ivec2((gl_LaunchIDEXT.xy + 7) % 128), 0).rgb * 2.f - 1.f;
+
+	const vec3			colorTex		= textureGrad(sampler2D(textures[mat.colorTexIdx	], texSampler), texUV, dPdxy[0], dPdxy[1]).rgb;
+	const vec3			emissiveTex		= textureGrad(sampler2D(textures[mat.emissiveTexIdx	], texSampler), texUV, dPdxy[0], dPdxy[1]).rgb;
+	const vec3			pbrTex			= textureGrad(sampler2D(textures[mat.pbrTexIdx		], texSampler), texUV, dPdxy[0], dPdxy[1]).rgb;
+
+	const vec3			noiseShadow		= vec3(noiseShadowTex.xy, abs(noiseShadowTex.z));
+	const vec3			noiseReflect	= vec3(noiseReflectTex.xy, abs(noiseReflectTex.z));
 
 	const vec3			colorFactor		= mat.colorFactor		* colorTex;
 	const vec3			emissiveFactor	= mat.emissiveFactor	* emissiveTex;
@@ -162,18 +146,27 @@ void main() {
 	vec3				irradiance		= vec3(0.f);
 
 	for (uint8_t x = uint8_t(0); x < rayHitUniform.lightCount; x++) {
-		const Light	light		= rayHitUniform.lights[x];
+		const Light	light				= rayHitUniform.lights[x];
 
-		const vec3	lightDir	= light.pos - worldPos;
+		const vec3	lightCenterTarget	= light.pos - worldPos;
+		const vec3	lightCenterDir		= normalize(lightCenterTarget);
+		const vec3	lightCenterNorm		= -lightCenterDir;
 
-		const vec3	L			= normalize(lightDir);
+		vec3 lightCenterTang, lightCenterBitang;
 
-		const float	NdotL		= max(dot(worldNorm, L), 0.f);
+		BranchlessONB(lightCenterNorm, lightCenterTang, lightCenterBitang);
+
+		const vec3	lightHemi			= noiseShadow.x * lightCenterTang + noiseShadow.y * lightCenterBitang + noiseShadow.z * lightCenterNorm;
+
+		const vec3	lightTarget			= lightCenterTarget + noiseShadow * light.radius;
+		const vec3	L					= normalize(lightTarget);
+
+		const float	NdotL				= max(dot(worldNorm, L), 0.f);
 
 		if (NdotL > 0.f) {
-			const uint	rayFlags		= gl_RayFlagsSkipClosestHitShaderEXT;
+			const uint	rayFlags		= gl_RayFlagsSkipClosestHitShaderEXT | gl_RayFlagsTerminateOnFirstHitEXT;
 
-			const float	lightDist		= length(lightDir);
+			const float	lightDist		= length(lightTarget);
 
 			shadowPayload.isShadowed	= true;
 
@@ -187,7 +180,7 @@ void main() {
 				const float NdotH		= max(dot(worldNorm, H), 0.f);
 				const float VdotH		= max(dot(V, H), 0.f);
 
-				const float attenuation = NdotL / (lightDist * lightDist + 1.f);
+				const float attenuation	= NdotL / (lightDist * lightDist + 1.f);
 
 				irradiance += attenuation * light.color * BRDF(NdotL, NdotV, NdotH, VdotH, roughFactor, metalFactor, colorFactor);
 			}
@@ -201,14 +194,14 @@ void main() {
 
 	vec3 tang, bitang;
 
-	createCoordinateSystem(worldNorm, tang, bitang);
+	BranchlessONB(worldNorm, tang, bitang);
 
-	const vec3	hemisphere	= samplingHemisphere(payload.seed, tang, bitang, worldNorm);
+	const vec3	reflectHemi	= noiseReflectTex.x * tang + noiseReflectTex.y * bitang + noiseReflectTex.z * worldNorm;
 
 	payload.position		= worldPos;
-	payload.direction		= mix(R, hemisphere, roughFactor * roughFactor);
+	payload.direction		= mix(R, reflectHemi, roughFactor * roughFactor);
 
-	payload.hitColor		= occludeTex * irradiance + emissiveFactor;
+	payload.hitColor		= irradiance + emissiveFactor;
 	payload.attenuation		*= Fresnel(VdotH, metalFactor, colorFactor);
 	payload.coherence		*= 1.f - roughFactor;
 }

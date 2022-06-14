@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <dirent.h>
 #include <pthread.h>
 
 #define CGLTF_IMPLEMENTATION
@@ -225,7 +226,6 @@ typedef struct TextureList {
 } TextureList;
 
 typedef struct TranscodeTextureListArgs {
-	SolaRender*		engine;
 	TextureList*	textureList;
 	ktxTexture2**	ktxTextures;
 	uint16_t		count;
@@ -234,12 +234,153 @@ typedef struct TranscodeTextureListArgs {
 void* transcodeTextureList(TranscodeTextureListArgs* args) { // Transcodes KTX textures from textureList into block-compressed ktxTextures
 	for (uint16_t x = 0; x < args->count; x++) {
 		if (__atomic_compare_exchange_n(&args->textureList[x].semaphore, &(uint8_t) {0}, 1, 0, __ATOMIC_SEQ_CST, __ATOMIC_RELAXED)) {
-			KTX_CHECK(ktxTexture2_CreateFromMemory(args->textureList[x].data, args->textureList[x].dataSize, KTX_TEXTURE_CREATE_LOAD_IMAGE_DATA_BIT, &args->ktxTextures[x]))
+			KTX_CHECK(ktxTexture2_CreateFromMemory(args->textureList[x].data, args->textureList[x].dataSize, 0, &args->ktxTextures[x]))
 
 			KTX_CHECK(ktxTexture2_TranscodeBasis(args->ktxTextures[x], KTX_TTF_BC7_RGBA, 0))
 		}
 	}
 	pthread_exit(NULL);
+}
+void createTextureImages(SolaRender* engine, uint16_t imageCount, ktxTexture2** ktxTextures, VkImage* images, VkImageView* imageViews, VkDeviceMemory* imageMemory) {
+	VkDeviceSize dataSize = 0;
+	// Resource creation
+	{
+		VkDeviceSize			allocationSize	= 0;
+		uint32_t				memoryTypeBits	= 0;
+		VkMemoryRequirements	memoryRequirements[SR_MAX_TEX_DESC];
+		VkBindImageMemoryInfo	bindImageMemoryInfo[SR_MAX_TEX_DESC];
+
+		for (uint16_t x = 0; x < imageCount; x++) {
+			VkImageCreateInfo imageInfo = {
+				.sType			= VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+				.imageType		= VK_IMAGE_TYPE_2D,
+				.format			= ktxTextures[x]->vkFormat,
+				.extent.width	= ktxTextures[x]->baseWidth,
+				.extent.height	= ktxTextures[x]->baseHeight,
+				.extent.depth	= 1,
+				.mipLevels		= ktxTextures[x]->numLevels,
+				.arrayLayers	= 1,
+				.samples		= VK_SAMPLE_COUNT_1_BIT,
+				.usage			= VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT
+			};
+			VK_CHECK(vkCreateImage(engine->device, &imageInfo, NULL, &images[x]))
+
+			vkGetImageMemoryRequirements(engine->device, images[x], &memoryRequirements[x]);
+
+			allocationSize	+= (memoryRequirements[x].alignment - (allocationSize % memoryRequirements[x].alignment)) % memoryRequirements[x].alignment;
+			allocationSize	+= memoryRequirements[x].size;
+
+			memoryTypeBits	|= memoryRequirements[x].memoryTypeBits;
+
+			dataSize		+= ktxTextures[x]->dataSize;
+		}
+		VkMemoryAllocateInfo memoryAllocateInfo = {
+			.sType				= VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+			.allocationSize		= allocationSize,
+			.memoryTypeIndex	= selectMemoryType(engine, memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)
+		};
+		VK_CHECK(vkAllocateMemory(engine->device, &memoryAllocateInfo, NULL, imageMemory))
+
+		VkDeviceSize memoryOffset = 0;
+
+		for (uint16_t x = 0; x < imageCount; x++) {
+			memoryOffset += (memoryRequirements[x].alignment - (memoryOffset % memoryRequirements[x].alignment)) % memoryRequirements[x].alignment;
+
+			bindImageMemoryInfo[x].sType		= VK_STRUCTURE_TYPE_BIND_IMAGE_MEMORY_INFO;
+			bindImageMemoryInfo[x].pNext		= NULL;
+			bindImageMemoryInfo[x].image		= images[x];
+			bindImageMemoryInfo[x].memory		= *imageMemory;
+			bindImageMemoryInfo[x].memoryOffset	= memoryOffset;
+
+			memoryOffset += memoryRequirements[x].size;
+		}
+		VK_CHECK(vkBindImageMemory2(engine->device, imageCount, bindImageMemoryInfo))
+
+		for (uint16_t x = 0; x < imageCount; x++) {
+			VkImageSubresourceRange subresourceRange = {
+				.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+				.levelCount = ktxTextures[x]->numLevels,
+				.layerCount = 1
+			};
+			VkImageViewCreateInfo imageViewInfo = {
+				.sType				= VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+				.viewType			= VK_IMAGE_VIEW_TYPE_2D,
+				.format				= ktxTextures[x]->vkFormat,
+				.subresourceRange	= subresourceRange,
+				.image				= images[x]
+			};
+			VK_CHECK(vkCreateImageView(engine->device, &imageViewInfo, NULL, &imageViews[x]))
+		}
+	}
+	// Image transition
+	{
+
+		VkCommandBuffer cmdBuffer = createTransientCmdBuffer(engine);
+
+		VulkanBuffer stagingBuffer = createBuffer(engine, dataSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+			VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, NULL, NULL);
+
+		void*			mapped;
+		VkDeviceSize	mappedOffset = 0;
+
+		VK_CHECK(vkMapMemory(engine->device, stagingBuffer.memory, 0, dataSize, 0, &mapped))
+
+		for (uint16_t idxTexture = 0; idxTexture < imageCount; idxTexture++) {
+			VkImageSubresourceRange subresourceRange = {
+				.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+				.levelCount = ktxTextures[idxTexture]->numLevels,
+				.layerCount = 1
+			};
+			VkImageMemoryBarrier imageMemoryBarrier = {
+				.sType					= VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+				.dstAccessMask			= VK_ACCESS_TRANSFER_WRITE_BIT,
+				.newLayout				= VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+				.srcQueueFamilyIndex	= VK_QUEUE_FAMILY_IGNORED,
+				.dstQueueFamilyIndex	= VK_QUEUE_FAMILY_IGNORED,
+				.image					= images[idxTexture],
+				.subresourceRange		= subresourceRange,
+			};
+			vkCmdPipelineBarrier(cmdBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0, NULL, 1, &imageMemoryBarrier);
+
+			memcpy(((char*) mapped) + mappedOffset, ktxTextures[idxTexture]->pData, ktxTextures[idxTexture]->dataSize);
+
+			assert(ktxTextures[idxTexture]->numLevels <= SR_MAX_MIP_LEVELS);
+
+			VkBufferImageCopy copyRegions[SR_MAX_MIP_LEVELS] = {
+				[0 ... SR_MAX_MIP_LEVELS - 1].imageSubresource = {
+					.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+					.layerCount = 1
+				},
+				[0 ... SR_MAX_MIP_LEVELS - 1].imageExtent.depth = 1
+			};
+			for (uint8_t idxMipLevel = 0; idxMipLevel < ktxTextures[idxTexture]->numLevels; idxMipLevel++) {
+				ktx_size_t mipOffset;
+
+				KTX_CHECK(ktxTexture_GetImageOffset((ktxTexture*) ktxTextures[idxTexture], idxMipLevel, 0, 0, &mipOffset))
+
+				copyRegions[idxMipLevel].bufferOffset				= mappedOffset + mipOffset;
+				copyRegions[idxMipLevel].imageSubresource.mipLevel	= idxMipLevel;
+				copyRegions[idxMipLevel].imageExtent.width			= ktxTextures[idxTexture]->baseWidth >> idxMipLevel;
+				copyRegions[idxMipLevel].imageExtent.height			= ktxTextures[idxTexture]->baseHeight >> idxMipLevel;
+			}
+			mappedOffset += ktxTextures[idxTexture]->dataSize;
+
+			vkCmdCopyBufferToImage(cmdBuffer, stagingBuffer.buffer, images[idxTexture], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, ktxTextures[idxTexture]->numLevels, copyRegions);
+
+			imageMemoryBarrier.srcAccessMask	= VK_ACCESS_TRANSFER_WRITE_BIT;
+			imageMemoryBarrier.dstAccessMask	= VK_ACCESS_SHADER_READ_BIT;
+			imageMemoryBarrier.oldLayout		= VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+			imageMemoryBarrier.newLayout		= VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+			vkCmdPipelineBarrier(cmdBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR, 0, 0, NULL, 0, NULL, 1, &imageMemoryBarrier);
+		}
+		vkUnmapMemory(engine->device, stagingBuffer.memory);
+
+		flushTransientCmdBuffer(engine, cmdBuffer);
+
+		vkDestroyBuffer(engine->device, stagingBuffer.buffer, NULL);
+		vkFreeMemory(engine->device, stagingBuffer.memory, NULL);
+	}
 }
 void buildAccelerationStructures(SolaRender* engine, uint8_t infoCount, VkAccelerationStructureBuildGeometryInfoKHR* geometryInfos, VkAccelerationStructureBuildRangeInfoKHR** rangeInfosArray) { // Waits for prior builds to finish, then executes a new one
 	VK_CHECK(vkWaitForFences(engine->device, 1, &engine->accelStructBuildCmdBufferFence, VK_TRUE, UINT64_MAX))
@@ -328,12 +469,12 @@ void createInstance(SolaRender* engine) {
 		fprintf(stderr, "Validation layer not found!\n");
 		exit(1);
 	}
-	VkValidationFeatureEnableEXT validationFeatures[] = { VK_VALIDATION_FEATURE_ENABLE_BEST_PRACTICES_EXT, VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT };
-	
-	VkValidationFeaturesEXT features = {
+	VkValidationFeatureEnableEXT enabledValidationFeatures[] = { VK_VALIDATION_FEATURE_ENABLE_BEST_PRACTICES_EXT, VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT };
+
+	VkValidationFeaturesEXT validationFeatures = {
 		.sType							= VK_STRUCTURE_TYPE_VALIDATION_FEATURES_EXT,
-		.enabledValidationFeatureCount	= sizeof(validationFeatures) / sizeof(VkValidationFeatureEnableEXT),
-		.pEnabledValidationFeatures		= validationFeatures
+		.enabledValidationFeatureCount	= sizeof(enabledValidationFeatures) / sizeof(VkValidationFeatureEnableEXT),
+		.pEnabledValidationFeatures		= enabledValidationFeatures
 	};
 #endif
 	VkInstanceCreateInfo instanceInfo = {
@@ -342,7 +483,7 @@ void createInstance(SolaRender* engine) {
 		.enabledExtensionCount		= glfwExtensionCount,
 		.ppEnabledExtensionNames	= glfwExtensions,
 	#ifndef NDEBUG
-		.pNext						= &features,
+		.pNext						= &validationFeatures,
 		.enabledLayerCount			= sizeof(validationLayers) / sizeof(char*),
 		.ppEnabledLayerNames		= validationLayers
 	#endif
@@ -382,9 +523,13 @@ void selectPhysicalDevice(SolaRender* engine) {
 	VkPhysicalDeviceRayTracingPipelinePropertiesKHR rayTracePipelineProperties = {
 		.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_PROPERTIES_KHR
 	};
+	VkPhysicalDeviceAccelerationStructurePropertiesKHR accelStructProperties = {
+		.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_PROPERTIES_KHR,
+		.pNext = &rayTracePipelineProperties
+	};
 	VkPhysicalDeviceProperties2 properties = {
 		.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2,
-		.pNext = &rayTracePipelineProperties
+		.pNext = &accelStructProperties
 	};
 	for (uint8_t idxPhysDevice = 0; idxPhysDevice < physDeviceCount; idxPhysDevice++) {
 		vkGetPhysicalDeviceFeatures2(physicalDevices[idxPhysDevice], &features2);
@@ -392,9 +537,9 @@ void selectPhysicalDevice(SolaRender* engine) {
 		
 		if (rayTracePipelineFeatures.rayTracingPipeline && accelStructFeatures.accelerationStructure && vulkan12Features.storageBuffer8BitAccess
 				&& vulkan12Features.uniformAndStorageBuffer8BitAccess && vulkan12Features.shaderInt8 && vulkan12Features.descriptorBindingPartiallyBound
-				&& vulkan12Features.scalarBlockLayout && vulkan12Features.bufferDeviceAddress && vulkan11Features.storageBuffer16BitAccess
-				&& features2.features.samplerAnisotropy && features2.features.shaderInt64 && features2.features.shaderInt16 && features2.features.textureCompressionBC
-				&& rayTracePipelineProperties.maxRayRecursionDepth >= SR_MAX_RAY_RECURSION && properties.properties.limits.maxSamplerAnisotropy >= 16.f) {
+				&& vulkan12Features.scalarBlockLayout && vulkan12Features.bufferDeviceAddress && vulkan11Features.storageBuffer16BitAccess && features2.features.samplerAnisotropy
+				&& features2.features.shaderInt64 && features2.features.shaderInt16 && features2.features.textureCompressionBC&& rayTracePipelineProperties.maxRayRecursionDepth >= SR_MAX_RAY_RECURSION
+				&& accelStructProperties.maxGeometryCount >= SR_MAX_BLAS && properties.properties.limits.maxSamplerAnisotropy >= 16.f) {
 			uint32_t				queueFamilyCount;
 			VkQueueFamilyProperties queueFamilies[8];
 			
@@ -472,7 +617,7 @@ void createLogicalDevice(SolaRender* engine) {
 		};
 		const char* const deviceExtensions[] = {
 			VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME, VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME,
-			VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME, VK_KHR_SHADER_CLOCK_EXTENSION_NAME, VK_KHR_SWAPCHAIN_EXTENSION_NAME
+			VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME, VK_KHR_SWAPCHAIN_EXTENSION_NAME
 		};
 		VkDeviceCreateInfo deviceCreateInfo = {
 			.sType						= VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
@@ -523,7 +668,7 @@ void createLogicalDevice(SolaRender* engine) {
 			.mipmapMode			= VK_SAMPLER_MIPMAP_MODE_LINEAR,
 			.anisotropyEnable	= VK_TRUE,
 			.maxAnisotropy		= 16.f,
-			.maxLod				= 31.f
+			.maxLod				= (float) (SR_MAX_MIP_LEVELS - 1)
 		};
 		VK_CHECK(vkCreateSampler(engine->device, &samplerInfo, NULL, &engine->textureSampler))
 	}
@@ -617,16 +762,37 @@ void initializeGeometry(SolaRender* engine) {
 	// Geometry and bottom-level acceleration structures
 	VkDeviceSize scratchSize = 0;
 	{
-		cgltf_options sceneOptions = {
-			.type = cgltf_file_type_glb
-		};
-		cgltf_data* sceneData[2];
+		cgltf_data* sceneData[32];
+		uint8_t sceneCount = 0;
 
-		CGLTF_CHECK(cgltf_parse_file(&sceneOptions, "models/Sponza.glb",		&sceneData[0]))
-		CGLTF_CHECK(cgltf_parse_file(&sceneOptions, "models/DamagedHelmet.glb",	&sceneData[1]))
+		DIR* modelsDirectory = opendir("assets");
 
-		uint16_t		materialCount	= 0;
-		uint16_t		primitiveCount	= 0;
+		if (unlikely(modelsDirectory == NULL)) {
+			fprintf(stderr, "Failed to open \"assets\" directory!\n");
+			exit(1);
+		}
+		for (struct dirent* modelsFile = readdir(modelsDirectory); modelsFile != NULL; modelsFile = readdir(modelsDirectory)) {
+			if (strcmp(".glb", modelsFile->d_name + strlen(modelsFile->d_name) - 4) == 0) {
+				cgltf_options sceneOptions = {
+					.type = cgltf_file_type_glb
+				};
+				if (unlikely(sceneCount + 1 > sizeof(sceneData) / sizeof(void*))) {
+					fprintf(stderr, "Exceeded model file limit of %lu files!\n", sizeof(sceneData) / sizeof(void*));
+					exit(1);
+				}
+				char folder[sizeof(modelsFile->d_name) + 7] = "assets/";
+
+				CGLTF_CHECK(cgltf_parse_file(&sceneOptions, strcat(folder, modelsFile->d_name), &sceneData[sceneCount]));
+
+				sceneCount++;
+			}
+		}
+		if (unlikely(sceneCount <= 0)) {
+			fprintf(stderr, "Failed to find any model files!\n");
+			exit(1);
+		}
+		uint8_t			materialCount	= 0;
+		uint8_t			primitiveCount	= 0;
 		VkDeviceSize	indexBufferSize = 0;
 		uint32_t		vertexCount		= 0;
 
@@ -643,13 +809,21 @@ void initializeGeometry(SolaRender* engine) {
 
 		uint8_t idxMesh = 0;
 
-		for (uint8_t idxScene = 0; idxScene < sizeof(sceneData) / sizeof(void*); idxScene++) { // Gathering scene data
+		for (uint8_t idxScene = 0; idxScene < sceneCount; idxScene++) { // Gathering scene data
 			materialCount += sceneData[idxScene]->materials_count;
 
 			for (uint8_t idxSceneMesh = 0; idxSceneMesh < sceneData[idxScene]->meshes_count; idxSceneMesh++) {
+				if (unlikely(idxMesh + 1 > SR_MAX_BLAS)) {
+					fprintf(stderr, "Exceeded model mesh limit of %hhu meshes!\n", SR_MAX_BLAS);
+					exit(1);
+				}
 				perMeshData[idxMesh].indexBufferSize	= sceneData[idxScene]->meshes[idxSceneMesh].primitives[0].indices->buffer_view->size;
 				perMeshData[idxMesh].indexAddr			= sceneData[idxScene]->bin + sceneData[idxScene]->meshes[idxSceneMesh].primitives[0].indices->buffer_view->offset;
 
+				if (unlikely(primitiveCount + sceneData[idxScene]->meshes[idxSceneMesh].primitives_count > sizeof(engine->rayHitUniform.geometryOffsets) / sizeof(GeometryOffsets))) {
+					fprintf(stderr, "Exceeded model primitive limit of %lu primitives!\n", sizeof(engine->rayHitUniform.geometryOffsets) / sizeof(GeometryOffsets));
+					exit(1);
+				}
 				primitiveCount	+= sceneData[idxScene]->meshes[idxSceneMesh].primitives_count;
 				indexBufferSize	+= perMeshData[idxMesh].indexBufferSize;
 
@@ -685,7 +859,7 @@ void initializeGeometry(SolaRender* engine) {
 			+ engine->bottomAccelStructCount * (sizeof(void*) + sizeof(VkAccelerationStructureBuildGeometryInfoKHR) + sizeof(VkAccelerationStructureBuildSizesInfoKHR)
 			+ sizeof(VkAccelerationStructureCreateInfoKHR) + sizeof(VkAccelerationStructureInstanceKHR)));
 		
-		Vertex* vertices = malloc(vertexCount * sizeof(Vertex) + indexBufferSize + materialCount * sizeof(Material) + primitiveCount * sizeof(uint32_t));
+		Vertex* vertices = malloc(vertexCount * sizeof(Vertex) + indexBufferSize);
 
 		rangeInfos				= (VkAccelerationStructureBuildRangeInfoKHR*)		(geometries			+ primitiveCount);
 		rangeInfosArray			= (VkAccelerationStructureBuildRangeInfoKHR**)		(rangeInfos			+ primitiveCount);
@@ -694,9 +868,7 @@ void initializeGeometry(SolaRender* engine) {
 		accelStructInfos		= (VkAccelerationStructureCreateInfoKHR*)			(sizesInfos			+ engine->bottomAccelStructCount);
 		accelStructInstances	= (VkAccelerationStructureInstanceKHR*)				(accelStructInfos	+ engine->bottomAccelStructCount);
 		
-		char*		indices		= (char*)		(vertices	+ vertexCount);
-		Material*	materials	= (Material*)	(indices	+ indexBufferSize);
-		uint32_t*	primCounts	= (uint32_t*)	(materials	+ materialCount);
+		char* indices = (char*) (vertices + vertexCount);
 		
 		if (unlikely(!geometries || !vertices)) {
 			fprintf(stderr, "Failed to allocate host memory!\n");
@@ -706,9 +878,9 @@ void initializeGeometry(SolaRender* engine) {
 
 		idxMesh = 0;
 
-		uint32_t	idxVert		= 0;
+		uint32_t idxVert = 0;
 
-		for (uint8_t idxScene = 0; idxScene < sizeof(sceneData) / sizeof(void*); idxScene++) { // Interleaving vertex data
+		for (uint8_t idxScene = 0; idxScene < sceneCount; idxScene++) { // Interleaving vertex data
 			for (uint8_t idxSceneMesh = 0; idxSceneMesh < sceneData[idxScene]->meshes_count; idxSceneMesh++) {
 				memcpy(indexSlice, perMeshData[idxMesh].indexAddr, perMeshData[idxMesh].indexBufferSize);
 
@@ -723,11 +895,11 @@ void initializeGeometry(SolaRender* engine) {
 				idxMesh++;
 			}
 		}
-		TextureList		textureList[SR_MAX_TEX_DESC] = {0};
+		TextureList		textureList[SR_MAX_TEX_DESC] = { [0 ... SR_MAX_TEX_DESC - 1].semaphore = 0 };
 		ktxTexture2*	ktxTextures[SR_MAX_TEX_DESC];
 
-		// Default white texture
-		engine->textureImageCount = 1;
+		// Default white texture and blue noise texture
+		engine->textureImageCount = 2;
 		{
 			ktxTextureCreateInfo textureInfo = {
 				.vkFormat		= VK_FORMAT_R8G8B8A8_SRGB,
@@ -741,14 +913,19 @@ void initializeGeometry(SolaRender* engine) {
 			};
 			KTX_CHECK(ktxTexture2_Create(&textureInfo, KTX_TEXTURE_CREATE_ALLOC_STORAGE, &ktxTextures[0]))
 
+			KTX_CHECK(ktxTexture2_CreateFromNamedFile("assets/stbn_unitvec3_2Dx1D_128x128x64_0.ktx2", KTX_TEXTURE_CREATE_LOAD_IMAGE_DATA_BIT, &ktxTextures[1]))
+
 			memcpy(ktxTextures[0]->pData, (uint64_t[2]) { [0 ... 1] = UINT64_MAX }, sizeof(uint64_t[2]));
 
+			// Will not be transcoded
 			textureList[0].semaphore = 1;
+			textureList[1].semaphore = 1;
 		}
-		uint8_t		idxMaterial		= 0;
+		Material	materials[sizeof(engine->rayHitUniform.geometryOffsets) / sizeof(GeometryOffsets)];
+		uint8_t		idxMaterial = 0;
 
-		for (uint8_t idxScene = 0; idxScene < sizeof(sceneData) / sizeof(void*); idxScene++) { // Material setup, and collecting textures to transcode
-			for (uint16_t idxSceneMaterial = 0; idxSceneMaterial < sceneData[idxScene]->materials_count; idxSceneMaterial++) {
+		for (uint8_t idxScene = 0; idxScene < sceneCount; idxScene++) { // Material setup, and collecting textures to transcode
+			for (uint8_t idxSceneMaterial = 0; idxSceneMaterial < sceneData[idxScene]->materials_count; idxSceneMaterial++) {
 				memcpy(materials[idxMaterial].colorFactor,		sceneData[idxScene]->materials[idxSceneMaterial].pbr_metallic_roughness.base_color_factor,	sizeof(vec3));
 				memcpy(materials[idxMaterial].emissiveFactor,	sceneData[idxScene]->materials[idxSceneMaterial].emissive_factor,							sizeof(vec3));
 
@@ -765,6 +942,9 @@ void initializeGeometry(SolaRender* engine) {
 
 					engine->textureImageCount++;
 				}
+				else
+					materials[idxMaterial].colorTexIdx = 0;
+
 				if (sceneData[idxScene]->materials[idxSceneMaterial].pbr_metallic_roughness.metallic_roughness_texture.texture) {
 					materials[idxMaterial].pbrTexIdx = engine->textureImageCount;
 
@@ -775,6 +955,9 @@ void initializeGeometry(SolaRender* engine) {
 
 					engine->textureImageCount++;
 				}
+				else
+					materials[idxMaterial].pbrTexIdx = 0;
+
 				if (sceneData[idxScene]->materials[idxSceneMaterial].emissive_texture.texture) {
 					materials[idxMaterial].emissiveTexIdx = engine->textureImageCount;
 
@@ -785,16 +968,9 @@ void initializeGeometry(SolaRender* engine) {
 
 					engine->textureImageCount++;
 				}
-				if (sceneData[idxScene]->materials[idxSceneMaterial].occlusion_texture.texture) {
-					materials[idxMaterial].occludeTexIdx = engine->textureImageCount;
+				else
+					materials[idxMaterial].emissiveTexIdx = 0;
 
-					textureList[engine->textureImageCount].data = sceneData[idxScene]->bin +
-						sceneData[idxScene]->materials[idxSceneMaterial].occlusion_texture.texture->basisu_image->buffer_view->offset;
-
-					textureList[engine->textureImageCount].dataSize = sceneData[idxScene]->materials[idxSceneMaterial].occlusion_texture.texture->basisu_image->buffer_view->size;
-
-					engine->textureImageCount++;
-				}
 				materials[idxMaterial].alphaCutoff = sceneData[idxScene]->materials[idxSceneMaterial].alpha_cutoff;
 
 				sceneData[idxScene]->materials[idxSceneMaterial].extras.start_offset = idxMaterial; // material-reference for primitives
@@ -805,7 +981,6 @@ void initializeGeometry(SolaRender* engine) {
 		pthread_t threads[SR_MAX_THREADS];
 
 		TranscodeTextureListArgs transcodeTextureListArgs = {
-			.engine			= engine,
 			.textureList	= textureList,
 			.ktxTextures	= ktxTextures,
 			.count			= engine->textureImageCount,
@@ -816,148 +991,8 @@ void initializeGeometry(SolaRender* engine) {
 		for (uint8_t x = 0; x < engine->threadCount; x++)
 			pthread_join(threads[x], NULL);
 
-		// Texture image creation
-		{
-			VkDeviceSize dataSize = 0;
-			// Resource creation
-			{
-				VkDeviceSize			allocationSize	= 0;
-				uint32_t				memoryTypeBits	= 0;
-				VkMemoryRequirements	memoryRequirements[SR_MAX_TEX_DESC];
+		createTextureImages(engine, engine->textureImageCount, ktxTextures, engine->textureImages, engine->textureImageViews, &engine->textureMemory);
 
-				for (uint16_t x = 0; x < engine->textureImageCount; x++) {
-					assert(ktxTextures[x]->numLevels <= 32);
-
-					VkImageCreateInfo imageInfo = {
-						.sType			= VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
-						.imageType		= VK_IMAGE_TYPE_2D,
-						.extent.width	= ktxTextures[x]->baseWidth,
-						.extent.height	= ktxTextures[x]->baseHeight,
-						.extent.depth	= 1,
-						.mipLevels		= ktxTextures[x]->numLevels,
-						.arrayLayers	= 1,
-						.samples		= VK_SAMPLE_COUNT_1_BIT,
-						.usage			= VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT
-					};
-					if (unlikely(x == 0)) // Default white texture is uncompressed
-						imageInfo.format = VK_FORMAT_R8G8B8A8_SRGB;
-					else
-						imageInfo.format = VK_FORMAT_BC7_SRGB_BLOCK;
-
-					VK_CHECK(vkCreateImage(engine->device, &imageInfo, NULL, &engine->textureImages[x]))
-
-					vkGetImageMemoryRequirements(engine->device, engine->textureImages[x], &memoryRequirements[x]);
-
-					allocationSize	+= allocationSize % memoryRequirements[x].alignment;
-					allocationSize	+= memoryRequirements[x].size;
-
-					memoryTypeBits	|= memoryRequirements[x].memoryTypeBits;
-
-					dataSize		+= ktxTextures[x]->dataSize;
-				}
-				VkMemoryAllocateInfo memoryAllocateInfo = {
-					.sType				= VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
-					.allocationSize		= allocationSize,
-					.memoryTypeIndex	= selectMemoryType(engine, memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)
-				};
-				VK_CHECK(vkAllocateMemory(engine->device, &memoryAllocateInfo, NULL, &engine->textureMemory))
-
-				VkDeviceSize imageOffset = 0;
-
-				for (uint16_t x = 0; x < engine->textureImageCount; x++) {
-					imageOffset += imageOffset % memoryRequirements[x].alignment;
-
-					VK_CHECK(vkBindImageMemory(engine->device, engine->textureImages[x], engine->textureMemory, imageOffset));
-
-					imageOffset += memoryRequirements[x].size;
-
-					VkImageSubresourceRange subresourceRange = {
-						.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-						.levelCount = ktxTextures[x]->numLevels,
-						.layerCount = 1
-					};
-					VkImageViewCreateInfo imageViewInfo = {
-						.sType				= VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
-						.viewType			= VK_IMAGE_VIEW_TYPE_2D,
-						.subresourceRange	= subresourceRange,
-						.image				= engine->textureImages[x]
-					};
-					if (unlikely(x == 0)) // Default white texture is uncompressed
-						imageViewInfo.format = VK_FORMAT_R8G8B8A8_SRGB;
-					else
-						imageViewInfo.format = VK_FORMAT_BC7_SRGB_BLOCK;
-
-					VK_CHECK(vkCreateImageView(engine->device, &imageViewInfo, NULL, &engine->textureImageViews[x]))
-				}
-			}
-			// Image transition
-			{
-
-				VkCommandBuffer cmdBuffer = createTransientCmdBuffer(engine);
-
-				VulkanBuffer stagingBuffer = createBuffer(engine, dataSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-					VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, NULL, NULL);
-
-				void*			mapped;
-				VkDeviceSize	mappedOffset = 0;
-
-				VK_CHECK(vkMapMemory(engine->device, stagingBuffer.memory, 0, dataSize, 0, &mapped))
-
-				for (uint16_t idxTexture = 0; idxTexture < engine->textureImageCount; idxTexture++) {
-					VkImageSubresourceRange subresourceRange = {
-						.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-						.levelCount = ktxTextures[idxTexture]->numLevels,
-						.layerCount = 1
-					};
-					VkImageMemoryBarrier imageMemoryBarrier = {
-						.sType					= VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-						.dstAccessMask			= VK_ACCESS_TRANSFER_WRITE_BIT,
-						.newLayout				= VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-						.srcQueueFamilyIndex	= VK_QUEUE_FAMILY_IGNORED,
-						.dstQueueFamilyIndex	= VK_QUEUE_FAMILY_IGNORED,
-						.image					= engine->textureImages[idxTexture],
-						.subresourceRange		= subresourceRange,
-					};
-					vkCmdPipelineBarrier(cmdBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0, NULL, 1, &imageMemoryBarrier);
-
-					memcpy(((char*) mapped) + mappedOffset, ktxTextures[idxTexture]->pData, ktxTextures[idxTexture]->dataSize);
-
-					VkBufferImageCopy copyRegions[32] = {
-						[0 ... 31].imageSubresource = {
-							.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-							.layerCount = 1
-						},
-						[0 ... 31].imageExtent.depth = 1
-					};
-					for (uint8_t idxMipLevel = 0; idxMipLevel < ktxTextures[idxTexture]->numLevels; idxMipLevel++) {
-						ktx_size_t mipOffset;
-
-						KTX_CHECK(ktxTexture_GetImageOffset((ktxTexture*) ktxTextures[idxTexture], idxMipLevel, 0, 0, &mipOffset))
-
-						copyRegions[idxMipLevel].imageSubresource.mipLevel	= idxMipLevel;
-						copyRegions[idxMipLevel].imageExtent.width			= ktxTextures[idxTexture]->baseWidth >> idxMipLevel;
-						copyRegions[idxMipLevel].imageExtent.height			= ktxTextures[idxTexture]->baseHeight >> idxMipLevel;
-						copyRegions[idxMipLevel].bufferOffset				= mappedOffset + mipOffset;
-					}
-					mappedOffset += ktxTextures[idxTexture]->dataSize;
-
-					vkCmdCopyBufferToImage(cmdBuffer, stagingBuffer.buffer, engine->textureImages[idxTexture], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, ktxTextures[idxTexture]->numLevels, copyRegions);
-
-					imageMemoryBarrier.srcAccessMask	= VK_ACCESS_TRANSFER_WRITE_BIT;
-					imageMemoryBarrier.dstAccessMask	= VK_ACCESS_SHADER_READ_BIT;
-					imageMemoryBarrier.oldLayout		= VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-					imageMemoryBarrier.newLayout		= VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-
-					vkCmdPipelineBarrier(cmdBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR, 0, 0, NULL, 0, NULL, 1, &imageMemoryBarrier);
-				}
-				vkUnmapMemory(engine->device, stagingBuffer.memory);
-
-				flushTransientCmdBuffer(engine, cmdBuffer);
-
-				vkDestroyBuffer(engine->device, stagingBuffer.buffer, NULL);
-				vkFreeMemory(engine->device, stagingBuffer.memory, NULL);
-			}
-		}
 		for (uint16_t x = 0; x < engine->textureImageCount; x++)
 			ktxTexture_Destroy((ktxTexture*) ktxTextures[x]);
 
@@ -968,23 +1003,30 @@ void initializeGeometry(SolaRender* engine) {
 		engine->vertexBuffer = createBuffer(engine, vertexCount * sizeof(Vertex),
 			VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
 			VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &engine->pushConstants.vertexAddr, vertices);
-		
+
 		engine->materialBuffer = createBuffer(engine, materialCount * sizeof(Material),
 			VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
 			&engine->pushConstants.materialAddr, materials);
 
-		uint8_t		idxGeom		= 0;
-		uint32_t	indexOffset	= 0;
+		uint8_t		idxGeom			= 0;
+		uint32_t	indexOffset		= 0;
 
-		idxVert = 0;
 		idxMesh = 0;
+		idxVert = 0;
 
-		for (uint8_t idxScene = 0; idxScene < sizeof(sceneData) / sizeof(void*); idxScene++) { // Setup for BLAS building
+		for (uint8_t idxScene = 0; idxScene < sceneCount; idxScene++) { // Setup for BLAS building
 			for (uint8_t idxSceneMesh = 0; idxSceneMesh < sceneData[idxScene]->meshes_count; idxSceneMesh++) {
+				uint32_t primCounts[sizeof(engine->rayHitUniform.geometryOffsets) / sizeof(GeometryOffsets)];
+
+				engine->rayHitUniform.instanceOffsets[idxMesh] = idxGeom;
 
 				rangeInfosArray[idxMesh] = &rangeInfos[idxGeom];
 
-				engine->rayHitUniform.instanceOffsets[idxMesh] = idxGeom;
+				buildGeometryInfos[idxMesh].sType			= VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
+				buildGeometryInfos[idxMesh].type			= VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
+				buildGeometryInfos[idxMesh].flags			= VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
+				buildGeometryInfos[idxMesh].geometryCount	= sceneData[idxScene]->meshes[idxSceneMesh].primitives_count;
+				buildGeometryInfos[idxMesh].pGeometries		= &geometries[idxGeom];
 
 				for (uint16_t idxPrim = 0; idxPrim < sceneData[idxScene]->meshes[idxSceneMesh].primitives_count; idxPrim++) {
 					geometries[idxGeom].sType										= VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
@@ -995,7 +1037,7 @@ void initializeGeometry(SolaRender* engine) {
 					geometries[idxGeom].geometry.triangles.vertexStride				= sizeof(Vertex);
 					geometries[idxGeom].geometry.triangles.maxVertex				= sceneData[idxScene]->meshes[idxSceneMesh].primitives[idxPrim].attributes[0].data->count - 1;
 					geometries[idxGeom].geometry.triangles.indexType				= VK_INDEX_TYPE_UINT16;
-					geometries[idxGeom].geometry.triangles.indexData.deviceAddress	= engine->pushConstants.indexAddr;
+					geometries[idxGeom].geometry.triangles.indexData.deviceAddress	= engine->pushConstants.indexAddr + indexOffset;
 
 					if (sceneData[idxScene]->meshes[idxSceneMesh].primitives[idxPrim].material->alpha_mode == cgltf_alpha_mode_opaque)
 						geometries[idxGeom].flags = VK_GEOMETRY_OPAQUE_BIT_KHR;
@@ -1003,24 +1045,18 @@ void initializeGeometry(SolaRender* engine) {
 						geometries[idxGeom].flags = VK_GEOMETRY_NO_DUPLICATE_ANY_HIT_INVOCATION_BIT_KHR;
 
 					rangeInfos[idxGeom].primitiveCount	= sceneData[idxScene]->meshes[idxSceneMesh].primitives[idxPrim].indices->count / 3;
-					rangeInfos[idxGeom].primitiveOffset	= indexOffset + sceneData[idxScene]->meshes[idxSceneMesh].primitives[idxPrim].indices->offset;
+					rangeInfos[idxGeom].primitiveOffset	= sceneData[idxScene]->meshes[idxSceneMesh].primitives[idxPrim].indices->offset;
 					rangeInfos[idxGeom].firstVertex		= idxVert;
 
-					primCounts[idxGeom] = rangeInfos[idxGeom].primitiveCount;
+					primCounts[idxPrim] = rangeInfos[idxGeom].primitiveCount;
 
-					engine->rayHitUniform.geometryOffsets[idxGeom].index	= rangeInfos[idxGeom].primitiveOffset;
+					engine->rayHitUniform.geometryOffsets[idxGeom].index	= rangeInfos[idxGeom].primitiveOffset + indexOffset;
 					engine->rayHitUniform.geometryOffsets[idxGeom].vertex	= idxVert * sizeof(Vertex);
-					engine->rayHitUniform.geometryOffsets[idxGeom].material	= (uint8_t) sceneData[idxScene]->meshes[idxSceneMesh].primitives[idxPrim].material->extras.start_offset;
+					engine->rayHitUniform.geometryOffsets[idxGeom].material	= sceneData[idxScene]->meshes[idxSceneMesh].primitives[idxPrim].material->extras.start_offset;
 
 					idxVert += sceneData[idxScene]->meshes[idxSceneMesh].primitives[idxPrim].attributes[0].data->count;
 					idxGeom++;
 				}
-				buildGeometryInfos[idxMesh].sType			= VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
-				buildGeometryInfos[idxMesh].type			= VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
-				buildGeometryInfos[idxMesh].flags			= VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
-				buildGeometryInfos[idxMesh].geometryCount	= sceneData[idxScene]->meshes[idxSceneMesh].primitives_count;
-				buildGeometryInfos[idxMesh].pGeometries		= geometries;
-
 				sizesInfos[idxMesh].sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR;
 
 				engine->vkGetAccelerationStructureBuildSizesKHR(engine->device, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
@@ -1050,9 +1086,9 @@ void initializeGeometry(SolaRender* engine) {
 						{ 0.f, 1.f, 0.f, 0.f },
 						{ 0.f, 0.f, 1.f, 0.f }
 					} };
-				accelStructInstances[idxMesh].mask = 0xFF;
-				accelStructInstances[idxMesh].flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
-				accelStructInstances[idxMesh].accelerationStructureReference = engine->vkGetAccelerationStructureDeviceAddressKHR(engine->device, &accelStructAddressInfo);
+				accelStructInstances[idxMesh].mask								= 0xFF;
+				accelStructInstances[idxMesh].flags								= VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
+				accelStructInstances[idxMesh].accelerationStructureReference	= engine->vkGetAccelerationStructureDeviceAddressKHR(engine->device, &accelStructAddressInfo);
 
 				indexOffset += perMeshData[idxMesh].indexBufferSize;
 				idxMesh++;
@@ -1069,7 +1105,7 @@ void initializeGeometry(SolaRender* engine) {
 
 		free(vertices);
 		
-		for (uint8_t x = 0; x < sizeof(sceneData) / sizeof(void*); x++)
+		for (uint8_t x = 0; x < sceneCount; x++)
 			cgltf_free(sceneData[x]);
 	}
 	mat4 rotation = GLM_MAT4_IDENTITY_INIT;
@@ -1077,10 +1113,10 @@ void initializeGeometry(SolaRender* engine) {
 	glm_rotate_x(rotation, glm_rad(10.f), rotation);
 	glm_rotate_y(rotation, glm_rad(40.f), rotation);
 
-	memcpy(&accelStructInstances[1].transform, rotation, sizeof(VkTransformMatrixKHR));
+	memcpy(&accelStructInstances[0].transform, rotation, sizeof(VkTransformMatrixKHR));
 
-	accelStructInstances[1].transform.matrix[0][3] = 3.f;
-	accelStructInstances[1].transform.matrix[1][3] = 3.f;
+	accelStructInstances[0].transform.matrix[0][3] = 3.f;
+	accelStructInstances[0].transform.matrix[1][3] = 3.f;
 
 	// Top-level acceleration structure
 	{
@@ -1594,24 +1630,30 @@ void createRayTracingPipeline(SolaRender* engine) {
 		}
 	}
 }
-void srCreateEngine(SolaRender* engine, GLFWwindow* window, uint8_t coreCount) {
+void srCreateEngine(SolaRender* engine, GLFWwindow* window, uint8_t threadCount) {
 	engine->window = window;
 
-	if(coreCount > SR_MAX_THREADS)
+	if(threadCount > SR_MAX_THREADS)
 		engine->threadCount = SR_MAX_THREADS;
 	else
-		engine->threadCount = coreCount;
+		engine->threadCount = threadCount;
 
 	engine->rayHitUniform.lightCount = 3;
 
-	memcpy(engine->rayHitUniform.lights[0].pos,		(vec3) { -0.5f, 5.f, -1.f },	sizeof(vec3));
+	memcpy(engine->rayHitUniform.lights[0].pos,		(vec3) { -0.5f, 5.f, -0.f },	sizeof(vec3));
 	memcpy(engine->rayHitUniform.lights[0].color,	(vec3) { 40.f, 40.f, 40.f },	sizeof(vec3));
+
+	engine->rayHitUniform.lights[0].radius = 0.2f;
 
 	memcpy(engine->rayHitUniform.lights[1].pos,		(vec3) { 7.5f, 0.5f, 2.5f },	sizeof(vec3));
 	memcpy(engine->rayHitUniform.lights[1].color,	(vec3) { 4.f, 4.f, 4.f },		sizeof(vec3));
 
+	engine->rayHitUniform.lights[1].radius = 0.05f;
+
 	memcpy(engine->rayHitUniform.lights[2].pos,		(vec3) { -8.f, 0.5f, -3.f },	sizeof(vec3));
 	memcpy(engine->rayHitUniform.lights[2].color,	(vec3) { 4.f, 2.f, 1.f },		sizeof(vec3));
+
+	engine->rayHitUniform.lights[2].radius = 0.05f;
 
 	glm_mat4_identity(engine->rayGenUniform.viewInverse);
 
@@ -1673,6 +1715,7 @@ void recreatePipeline(SolaRender* engine) {
 	createRayTracingPipeline(engine);
 }
 void srRenderFrame(SolaRender* engine) {
+
 	VK_CHECK(vkWaitForFences(engine->device, 1, &engine->renderQueueFences[engine->currentFrame], VK_TRUE, UINT64_MAX))
 	
 	uint32_t imageIndex;
