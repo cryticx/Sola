@@ -10,50 +10,26 @@
 
 hitAttributeEXT vec2 attribs;
 
-layout(location = 0)					rayPayloadInEXT	PrimaryPayload		payload;
-layout(location = 1)					rayPayloadEXT	ShadowPayload		shadowPayload;
+layout(location = 0)						rayPayloadInEXT	PrimaryPayload		payload;
+layout(location = 1)						rayPayloadEXT	ShadowPayload		shadowPayload;
+layout(location = 2)						rayPayloadEXT	DecalPayload		decalPayload;
 
-layout(push_constant)					uniform _PushConstants				{ PushConstants pushConstants; };
+layout(constant_id = 0)						const bool							TRACE_DECALS = false;
 
-layout(binding = tlasBind)				uniform accelerationStructureEXT	topLevelAS;
-layout(binding = uniHitBind, scalar)	uniform _RayHitUniform				{ RayHitUniform rayHitUniform; };
-layout(binding = sampBind)				uniform sampler						texSampler;
-layout(binding = texBind)				uniform texture2D					textures[maxTex];
+layout(push_constant)						uniform _PushConstants				{ PushConstants pushConstants; };
 
-layout(buffer_reference, scalar)		readonly buffer Indices				{ u16vec3	a[]; };
-layout(buffer_reference, scalar)		readonly buffer Vertices			{ Vertex	a[]; };
-layout(buffer_reference, scalar)		readonly buffer Materials			{ Material	a[]; };
+layout(binding = tlasBind)					uniform accelerationStructureEXT	topLevelAS;
+layout(binding = uniHitBind, scalar)		uniform _RayHitUniform				{ RayHitUniform rayHitUniform; };
+layout(binding = sampBind)					uniform sampler						texSampler;
+layout(binding = texBind)					uniform texture2D					textures[maxTex];
+
+layout(buffer_reference, scalar)			readonly buffer Indices16			{ u16vec3	a[]; };
+layout(buffer_reference, scalar)			readonly buffer Indices32			{ u32vec3	a[]; };
+layout(buffer_reference, scalar)			readonly buffer Vertices			{ Vertex	a[]; };
+layout(buffer_reference, scalar, std430)	readonly buffer Materials			{ Material	a[]; };
 
 const float PI = 3.14159265359f;
 
-// Akenine-Möller et al. 2021, "Improved shader and texture level of detail using ray cones"
-vec2[2] AnisotropicEllipseAxesAkenineMoller(vec3 worldPos, vec3 worldNorm, vec3 rayDir, float coneRadius, Vertex vertices[3], vec2 texUV) {
-	const vec3	a1a			= rayDir - dot(worldNorm, rayDir) * worldNorm;
-	const vec3	a1b			= a1a - dot(rayDir, a1a) * rayDir;
-	const vec3	a1			= a1a * coneRadius / max(0.0001f, length(a1b));
-
-	const vec3	a2a			= cross(worldNorm, a1);
-	const vec3	a2b			= a2a - dot(rayDir, a2a) * rayDir;
-	const vec3	a2			= a2a * coneRadius / max(0.0001f, length(a2b));
-
-	const vec3	delta		= worldPos - vertices[0].pos;
-	const vec3	e1			= vertices[1].pos - vertices[0].pos;
-	const vec3	e2			= vertices[2].pos - vertices[0].pos;
-
-	const float	rcpTriArea	= 1.f / dot(worldNorm, cross(e1, e2));
-
-	const vec3	eP1			= delta + a1;
-	const float	u1			= dot(worldNorm, cross(eP1, e2)) * rcpTriArea;
-	const float	v1			= dot(worldNorm, cross(e1, eP1)) * rcpTriArea;
-	const vec2	dPdx		= (1.f - u1 - v1) * vertices[0].texUV + u1 * vertices[1].texUV + v1 * vertices[2].texUV - texUV;
-
-	const vec3	eP2			= delta + a2;
-	const float	u2			= dot(worldNorm, cross(eP2, e2)) * rcpTriArea;
-	const float	v2			= dot(worldNorm, cross(e1, eP2)) * rcpTriArea;
-	const vec2	dPdy		= (1.f - u2 - v2) * vertices[0].texUV + u2 * vertices[1].texUV + v2 * vertices[2].texUV - texUV;
-
-	return vec2[2] (dPdx, dPdy);
-}
 // Duff et al. 2017, Building an Orthonormal Basis, Revisited
 void BranchlessONB(vec3 N, out vec3 Nt, out vec3 Nb) {
     const float sign	= N.z >= 0.f ? 1.f : -1.f;
@@ -99,21 +75,30 @@ vec3 BRDF(float NdotL, float NdotV, float NdotH, float VdotH, float roughFactor,
 
 	const vec3	specular	= D * Vis * F;
 
-	const vec3	diffuse		= (vec3(1.f) - F) * (1.f - metalFactor) * colorFactor / PI;
+	const vec3	diffuse		= (vec3(1.f) - F) * colorFactor / PI;
 
 	return (diffuse + specular);
 }
 void main() {
-	const vec3			barycentrics	= vec3(1.f - attribs.x - attribs.y, attribs.x, attribs.y);
+	const vec3				barycentrics	= vec3(1.f - attribs.x - attribs.y, attribs.x, attribs.y);
 
-	const uint			geometryIndex	= rayHitUniform.instanceOffsets[gl_InstanceID] + gl_GeometryIndexEXT;
+	const uint				geometryIndex	= gl_InstanceCustomIndexEXT + gl_GeometryIndexEXT;
 
-	const u16vec3		indices			= Indices	(pushConstants.indexAddr	+	rayHitUniform.geometryOffsets[geometryIndex].index).a[gl_PrimitiveID];
-	Vertices			pVertices		= Vertices	(pushConstants.vertexAddr	+	rayHitUniform.geometryOffsets[geometryIndex].vertex);
-	const Material		mat				= Materials	(pushConstants.materialAddr).a[	rayHitUniform.geometryOffsets[geometryIndex].material];
-	
+	const GeometryOffsets	geometryOffsets	= rayHitUniform.geometryOffsets[geometryIndex];
+
+	Vertices				pVertices		= Vertices	(pushConstants.vertexAddr	+	geometryOffsets.vertex);
+
+	const Material			mat				= Materials	(pushConstants.materialAddr).a[	geometryOffsets.material];
+
+	uvec3					indices;
+
+	if (geometryOffsets.has16BitIndex == 1)
+		indices = Indices16(pushConstants.indexAddr + geometryOffsets.index).a[gl_PrimitiveID];
+	else
+		indices = Indices32(pushConstants.indexAddr + geometryOffsets.index).a[gl_PrimitiveID];
+
 	const Vertex		vertices[3]		= Vertex[3](pVertices.a[indices.x], pVertices.a[indices.y], pVertices.a[indices.z]);
-	
+
 	const vec3			objPos			= vertices[0].pos * barycentrics.x + vertices[1].pos * barycentrics.y + vertices[2].pos * barycentrics.z;
 	const vec3			objNorm			= normalize(vertices[0].norm * barycentrics.x + vertices[1].norm * barycentrics.y + vertices[2].norm * barycentrics.z);
 
@@ -122,28 +107,62 @@ void main() {
 
 	payload.totalDistance				+= gl_HitTEXT;
 
-	const float			rayConeRadius	= payload.totalDistance * payload.raySpreadAngle / pow(payload.coherence, 2.f); // less coherent rays should utilize less detailed textures
+	const float			rayConeRadius	= payload.totalDistance * payload.raySpreadAngle * pow(payload.coherence, 2.f); // Less coherent rays should utilize less detailed textures
 
 	const vec2			texUV			= vertices[0].texUV * barycentrics.x + vertices[1].texUV * barycentrics.y + vertices[2].texUV * barycentrics.z;
 
 	const vec2			dPdxy[2]		= AnisotropicEllipseAxesAkenineMoller(objPos, objNorm, gl_ObjectRayDirectionEXT, rayConeRadius, vertices, texUV);
 
-	const vec3			noiseShadowTex	= texelFetch(sampler2D(textures[1], texSampler), ivec2((gl_LaunchIDEXT.xy + 0) % 128), 0).rgb * 2.f - 1.f;
-	const vec3			noiseReflectTex	= texelFetch(sampler2D(textures[1], texSampler), ivec2((gl_LaunchIDEXT.xy + 7) % 128), 0).rgb * 2.f - 1.f;
+	const vec3			noiseShadowTex	= texelFetch(sampler2D(textures[unitVec3NoiseTex], texSampler), ivec2((gl_LaunchIDEXT.xy + 0) % 128), 0).rgb * 2.f - 1.f;
+	const vec3			noiseReflectTex	= texelFetch(sampler2D(textures[unitVec3NoiseTex], texSampler), ivec2((gl_LaunchIDEXT.xy + 7) % 128), 0).rgb * 2.f - 1.f;
+
+	const vec3			normTex			= normalize(textureGrad(sampler2D(textures[mat.normTexIdx], texSampler), texUV, dPdxy[0], dPdxy[1]).rgb * 2.f - 1.f);
 
 	const vec3			colorTex		= textureGrad(sampler2D(textures[mat.colorTexIdx	], texSampler), texUV, dPdxy[0], dPdxy[1]).rgb;
+	const vec2			pbrTex			= textureGrad(sampler2D(textures[mat.pbrTexIdx		], texSampler), texUV, dPdxy[0], dPdxy[1]).gb; // Green is roughness, blue is metalness
 	const vec3			emissiveTex		= textureGrad(sampler2D(textures[mat.emissiveTexIdx	], texSampler), texUV, dPdxy[0], dPdxy[1]).rgb;
-	const vec3			pbrTex			= textureGrad(sampler2D(textures[mat.pbrTexIdx		], texSampler), texUV, dPdxy[0], dPdxy[1]).rgb;
 
-	const vec3			noiseShadow		= vec3(noiseShadowTex.xy, abs(noiseShadowTex.z));
-	const vec3			noiseReflect	= vec3(noiseReflectTex.xy, abs(noiseReflectTex.z));
+	const vec3			noiseShadow		= vec3(noiseShadowTex.xy,	abs(noiseShadowTex.z));
+	const vec3			noiseReflect	= vec3(noiseReflectTex.xy,	abs(noiseReflectTex.z));
 
-	const vec3			colorFactor		= mat.colorFactor		* colorTex;
-	const vec3			emissiveFactor	= mat.emissiveFactor	* emissiveTex;
-	const float			metalFactor		= mat.metalFactor		* pbrTex.b;
-	const float			roughFactor		= mat.roughFactor		* pbrTex.g;
+	vec3 worldTang, worldBitang;
 
-	vec3				irradiance		= vec3(0.f);
+	BranchlessONB(worldNorm, worldTang, worldBitang);
+
+	const vec3			normFactor		= vec3(normTex.xy * mat.normalScale, normTex.z);
+
+	const vec3			mappedNorm		= normFactor.x * worldTang + normFactor.y * worldBitang + normFactor.z * worldNorm; // This doesn't follow the MikkTSpace algorithm recommended by the GlTF spec
+
+	vec3	colorFactor		= mat.colorFactor.rgb	* colorTex;
+	float	metalFactor		= mat.metalFactor		* pbrTex.y;
+	float	roughFactor		= mat.roughFactor		* pbrTex.x;
+	vec3	emissiveFactor	= mat.emissiveFactor	* emissiveTex;
+
+	if (TRACE_DECALS) {
+		decalPayload.rayConeRadius	= rayConeRadius;
+		decalPayload.alpha			= 0.f;
+
+		traceRayEXT(topLevelAS, gl_RayFlagsCullBackFacingTrianglesEXT, cullMaskDecal, 2, 0, 2, worldPos, 0.f, worldNorm, 0.05f, 2);
+
+		if (decalPayload.alpha > 0.01f) {
+			const float		alpha		= decalPayload.alpha;
+			const uint8_t	idxMaterial	= decalPayload.idxMaterial;
+			const vec2		texUV		= decalPayload.texUV;
+			const vec2		dPdxy[2]	= decalPayload.dPdxy;
+
+			const Material	mat			= Materials(pushConstants.materialAddr).a[idxMaterial];
+
+			const vec4		colorTex	= textureGrad(sampler2D(textures[mat.colorTexIdx	], texSampler), texUV, dPdxy[0], dPdxy[1]);
+			const vec2		pbrTex		= textureGrad(sampler2D(textures[mat.pbrTexIdx		], texSampler), texUV, dPdxy[0], dPdxy[1]).gb;
+			const vec3		emissiveTex	= textureGrad(sampler2D(textures[mat.emissiveTexIdx	], texSampler), texUV, dPdxy[0], dPdxy[1]).rgb;
+
+			colorFactor		= colorFactor		* (1.f - alpha) + alpha * mat.colorFactor.rgb	* colorTex.rgb;
+			metalFactor		= metalFactor		* (1.f - alpha) + alpha * mat.metalFactor		* pbrTex.y;
+			roughFactor		= roughFactor		* (1.f - alpha) + alpha * mat.roughFactor		* pbrTex.x;
+			emissiveFactor	= emissiveFactor	* (1.f - alpha) + alpha * mat.emissiveFactor	* emissiveTex;
+		}
+	}
+	vec3 irradiance = vec3(0.f);
 
 	for (uint8_t x = uint8_t(0); x < rayHitUniform.lightCount; x++) {
 		const Light	light				= rayHitUniform.lights[x];
@@ -156,34 +175,36 @@ void main() {
 
 		BranchlessONB(lightCenterNorm, lightCenterTang, lightCenterBitang);
 
-		const vec3	lightHemi			= noiseShadow.x * lightCenterTang + noiseShadow.y * lightCenterBitang + noiseShadow.z * lightCenterNorm;
+		const vec3	lightHemi	= noiseShadow.x * lightCenterTang + noiseShadow.y * lightCenterBitang + noiseShadow.z * lightCenterNorm;
 
-		const vec3	lightTarget			= lightCenterTarget + noiseShadow * light.radius;
-		const vec3	L					= normalize(lightTarget);
+		const vec3	lightTarget	= lightCenterTarget + noiseShadow * light.radius;
+		const vec3	L			= normalize(lightTarget);
 
-		const float	NdotL				= max(dot(worldNorm, L), 0.f);
+		const float	NdotL		= dot(mappedNorm, L);
+		const float	geomNdotL	= dot(worldNorm, L);
 
-		if (NdotL > 0.f) {
-			const uint	rayFlags		= gl_RayFlagsSkipClosestHitShaderEXT | gl_RayFlagsTerminateOnFirstHitEXT;
-
+		if (NdotL > 0.f && geomNdotL > 0.f) {
 			const float	lightDist		= length(lightTarget);
+			const float lightFalloff	= 1.f / (lightDist * lightDist + 1.f);
 
-			shadowPayload.isShadowed	= true;
+			const vec3	V				= -gl_WorldRayDirectionEXT;
+			const vec3	H				= normalize(V + L);
 
-			traceRayEXT(topLevelAS, rayFlags, 0xFF, 0, 0, 1, worldPos, 0.001f, L, lightDist, 1);
+			const float	NdotV			= max(dot(mappedNorm, V), 0.f);
+			const float NdotH			= max(dot(mappedNorm, H), 0.f);
+			const float VdotH			= max(dot(V, H), 0.f);
 
-			if (!shadowPayload.isShadowed) {
-				const vec3	V			= -gl_WorldRayDirectionEXT;
-				const vec3	H			= normalize(V + L);
+			const vec3	contribution	= NdotL * lightFalloff * light.color * BRDF(NdotL, NdotV, NdotH, VdotH, roughFactor, metalFactor, colorFactor);
 
-				const float	NdotV		= max(dot(worldNorm, V), 0.f);
-				const float NdotH		= max(dot(worldNorm, H), 0.f);
-				const float VdotH		= max(dot(V, H), 0.f);
+			if (length(contribution) > 0.001f) { //TODO fix curtain light-bleed
+				const uint	rayFlags		= gl_RayFlagsSkipClosestHitShaderEXT | gl_RayFlagsTerminateOnFirstHitEXT;
 
-				const float attenuation	= NdotL / (lightDist * lightDist + 1.f);
+				shadowPayload.isShadowed	= true;
 
-				irradiance += attenuation * light.color * BRDF(NdotL, NdotV, NdotH, VdotH, roughFactor, metalFactor, colorFactor);
-			}
+				traceRayEXT(topLevelAS, rayFlags, cullMaskNormal, 0, 0, 1, worldPos + worldNorm * 0.0001f, 0.f, L, lightDist, 1);
+
+				irradiance += contribution * (1.f - float(shadowPayload.isShadowed));
+  			}
 		}
 	}
 	const vec3	V			= -gl_WorldRayDirectionEXT;
@@ -192,11 +213,7 @@ void main() {
 
 	const float	VdotH		= max(dot(V, H), 0.f);
 
-	vec3 tang, bitang;
-
-	BranchlessONB(worldNorm, tang, bitang);
-
-	const vec3	reflectHemi	= noiseReflectTex.x * tang + noiseReflectTex.y * bitang + noiseReflectTex.z * worldNorm;
+	const vec3	reflectHemi	= noiseReflect.x * worldTang + noiseReflect.y * worldBitang + noiseReflect.z * worldNorm;
 
 	payload.position		= worldPos;
 	payload.direction		= mix(R, reflectHemi, roughFactor * roughFactor);

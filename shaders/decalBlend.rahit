@@ -8,9 +8,9 @@
 #include "hostDeviceCommon.glsl"
 #include "rayCommon.glsl"
 
-hitAttributeEXT vec2 hitAttribs;
+hitAttributeEXT vec2 attribs;
 
-layout(location = 0)						rayPayloadInEXT	PrimaryPayload	payload;
+layout(location = 2)						rayPayloadInEXT	DecalPayload	payload;
 
 layout(push_constant)						uniform _PushConstants			{ PushConstants pushConstants; };
 
@@ -24,7 +24,7 @@ layout(buffer_reference, scalar)			readonly buffer Vertices		{ Vertex	a[]; };
 layout(buffer_reference, scalar, std430)	readonly buffer Materials		{ Material	a[]; };
 
 void main() {
-	const vec3				barycentrics	= vec3(1.f - hitAttribs.x - hitAttribs.y, hitAttribs.x, hitAttribs.y);
+	const vec3				barycentrics	= vec3(1.f - attribs.x - attribs.y, attribs.x, attribs.y);
 
 	const uint				geometryIndex	= gl_InstanceCustomIndexEXT + gl_GeometryIndexEXT;
 
@@ -41,19 +41,24 @@ void main() {
 	else
 		indices = Indices32(pushConstants.indexAddr + geometryOffsets.index).a[gl_PrimitiveID];
 
-	const Vertex		vertices[3]		= Vertex[3](pVertices.a[indices.x], pVertices.a[indices.y], pVertices.a[indices.z]);
+	const Vertex		vertices[3]	= Vertex[3](pVertices.a[indices.x], pVertices.a[indices.y], pVertices.a[indices.z]);
 
-	const vec3			objPos			= vertices[0].pos * barycentrics.x + vertices[1].pos * barycentrics.y + vertices[2].pos * barycentrics.z;
-	const vec3			objNorm			= normalize(vertices[0].norm * barycentrics.x + vertices[1].norm * barycentrics.y + vertices[2].norm * barycentrics.z);
+	const vec3			objPos		= vertices[0].pos * barycentrics.x + vertices[1].pos * barycentrics.y + vertices[2].pos * barycentrics.z;
+	const vec3			objNorm		= normalize(vertices[0].norm * barycentrics.x + vertices[1].norm * barycentrics.y + vertices[2].norm * barycentrics.z);
 
-	const float			rayConeRadius	= (payload.totalDistance + gl_HitTEXT) * payload.raySpreadAngle * pow(payload.coherence, 2.f); // less coherent rays should utilize less detailed textures
+	const vec2			texUV		= vertices[0].texUV * barycentrics.x + vertices[1].texUV * barycentrics.y + vertices[2].texUV * barycentrics.z;
 
-	const vec2			texUV			= vertices[0].texUV * barycentrics.x + vertices[1].texUV * barycentrics.y + vertices[2].texUV * barycentrics.z;
+	const vec2			dPdxy[2]	= AnisotropicEllipseAxesAkenineMoller(objPos, objNorm, gl_ObjectRayDirectionEXT, payload.rayConeRadius, vertices, texUV);
 
-	const float			alphaTex		= textureLod(sampler2D(textures[mat.colorTexIdx], texSampler), texUV, 0.f).a;
+	const float			alphaTex	= textureGrad(sampler2D(textures[mat.colorTexIdx], texSampler), texUV, dPdxy[0], dPdxy[1]).a;
 
-	const float			alphaFactor		= mat.colorFactor.a * alphaTex;
+	const float			alphaFactor	= mat.colorFactor.a * alphaTex;
 
-	if (alphaFactor <= mat.alphaCutoff)
+	if (alphaFactor <= payload.alpha)
 		ignoreIntersectionEXT;
+
+	payload.alpha		= alphaFactor;
+	payload.texUV		= texUV;
+	payload.dPdxy		= dPdxy;
+	payload.idxMaterial	= geometryOffsets.material;
 }

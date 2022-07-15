@@ -59,11 +59,11 @@ typedef struct SolaRender {
 	VulkanBuffer				vertexBuffer;
 	VulkanBuffer				materialBuffer;
 
+	uint16_t					textureImageCount;
 	VkSampler					textureSampler;
 	VkImage						textureImages[SR_MAX_TEX_DESC];
 	VkImageView					textureImageViews[SR_MAX_TEX_DESC];
 	VkDeviceMemory				textureMemory;
-	uint16_t					textureImageCount;
 
 	PushConstants				pushConstants;
 
@@ -82,14 +82,13 @@ typedef struct SolaRender {
 	VulkanBuffer				missSBTBuffer;
 	VulkanBuffer				hitSBTBuffer;
 
-	VulkanBuffer				rayGenUniformBuffers[SR_MAX_SWAP_IMGS];
-	VulkanBuffer				rayHitUniformBuffers[SR_MAX_SWAP_IMGS];
+	VulkanBuffer				rayGenUniformBuffers[SR_MAX_QUEUED_FRAMES];
+	VulkanBuffer				rayHitUniformBuffers[SR_MAX_QUEUED_FRAMES];
 	RayGenUniform				rayGenUniform;
 	RayHitUniform				rayHitUniform;
 
 	VkSemaphore					imageAvailableSemaphores[SR_MAX_QUEUED_FRAMES];
 	VkSemaphore					renderFinishedSemaphores[SR_MAX_QUEUED_FRAMES];
-	VkFence						swapchainImageFences[SR_MAX_SWAP_IMGS];
 	VkFence						renderQueueFences[SR_MAX_QUEUED_FRAMES];
 	uint8_t						currentFrame;
 

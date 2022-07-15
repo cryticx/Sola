@@ -2,6 +2,7 @@
 
 #include <math.h>
 #include <stdio.h>
+#include <unistd.h>
 
 #include <sys/sysinfo.h>
 
@@ -21,10 +22,10 @@ int main() {
 	glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
 	glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
 	
-	srCreateEngine(&renderEngine, glfwCreateWindow(1920, 1080, "Sola", NULL, NULL), get_nprocs());
+	srCreateEngine(&renderEngine, glfwCreateWindow(1280, 720, "Sola", NULL, NULL), get_nprocs());
 
 	glfwSetInputMode(renderEngine.window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
-	
+
 	if (glfwRawMouseMotionSupported())
 		glfwSetInputMode(renderEngine.window, GLFW_RAW_MOUSE_MOTION, GLFW_TRUE);
 	
@@ -49,8 +50,8 @@ int main() {
 		cursorPos.prevX = cursorPos.x, cursorPos.prevY = cursorPos.y;
 		glfwGetCursorPos(renderEngine.window, &cursorPos.x, &cursorPos.y);
 		
-		cameraOrientation[0] += (float) fmod((cursorPos.prevX - cursorPos.x) * 0.001f, GLM_PI * 2);
-		cameraOrientation[1] += (float) fmod((cursorPos.prevY - cursorPos.y) * 0.001f, CGLM_PI_2);
+		cameraOrientation[0] = (float) fmod(cameraOrientation[0] + (cursorPos.prevX - cursorPos.x) * 0.001f, GLM_PI * 2);
+		cameraOrientation[1] = (float) fmod(cameraOrientation[1] + (cursorPos.prevY - cursorPos.y) * 0.001f, GLM_PI * 2);
 
 		// translate relative to orientation
 		float cosYaw = cosf(-cameraOrientation[0]), sinYaw = sinf(-cameraOrientation[0]), cosPitch = sinf(-cameraOrientation[1]);
@@ -83,6 +84,8 @@ int main() {
 		glm_rotate(renderEngine.rayGenUniform.viewInverse, cameraOrientation[1], (vec3) { 1.f, 0.f, 0.f });
 		
 		srRenderFrame(&renderEngine);
+
+		usleep(100);
 	}
 	srDestroyEngine(&renderEngine);
 	
