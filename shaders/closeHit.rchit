@@ -99,8 +99,10 @@ void main() {
 
 	const Vertex		vertices[3]		= Vertex[3](pVertices.a[indices.x], pVertices.a[indices.y], pVertices.a[indices.z]);
 
+	const float			facingSign		= float(gl_HitKindEXT == gl_HitKindFrontFacingTriangleEXT) * 2.f - 1.f;
+
 	const vec3			objPos			= vertices[0].pos * barycentrics.x + vertices[1].pos * barycentrics.y + vertices[2].pos * barycentrics.z;
-	const vec3			objNorm			= normalize(vertices[0].norm * barycentrics.x + vertices[1].norm * barycentrics.y + vertices[2].norm * barycentrics.z);
+	const vec3			objNorm			= facingSign * normalize(vertices[0].norm * barycentrics.x + vertices[1].norm * barycentrics.y + vertices[2].norm * barycentrics.z);
 
 	const vec3			worldPos		= vec3(gl_ObjectToWorldEXT * vec4(objPos, 1.f));
 	const vec3			worldNorm		= normalize(vec3(objNorm * gl_WorldToObjectEXT));
@@ -196,7 +198,7 @@ void main() {
 
 			const vec3	contribution	= NdotL * lightFalloff * light.color * BRDF(NdotL, NdotV, NdotH, VdotH, roughFactor, metalFactor, colorFactor);
 
-			if (length(contribution) > 0.001f) { //TODO fix curtain light-bleed
+			if (length(contribution) > 0.001f) {
 				const uint	rayFlags		= gl_RayFlagsSkipClosestHitShaderEXT | gl_RayFlagsTerminateOnFirstHitEXT;
 
 				shadowPayload.isShadowed	= true;

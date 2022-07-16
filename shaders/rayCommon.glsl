@@ -4,29 +4,29 @@
 #include "hostDeviceCommon.glsl"
 
 // Akenine-Möller et al. 2021, "Improved shader and texture level of detail using ray cones"
-vec2[2] AnisotropicEllipseAxesAkenineMoller(vec3 worldPos, vec3 worldNorm, vec3 rayDir, float coneRadius, Vertex vertices[3], vec2 texUV) {
-	const vec3	a1a			= rayDir - dot(worldNorm, rayDir) * worldNorm;
+vec2[2] AnisotropicEllipseAxesAkenineMoller(vec3 objPos, vec3 objNorm, vec3 rayDir, float coneRadius, Vertex vertices[3], vec2 texUV) {
+	const vec3	a1a			= rayDir - dot(objNorm, rayDir) * objNorm;
 	const vec3	a1b			= a1a - dot(rayDir, a1a) * rayDir;
 	const vec3	a1			= a1a * coneRadius / max(0.0001f, length(a1b));
 
-	const vec3	a2a			= cross(worldNorm, a1);
+	const vec3	a2a			= cross(objNorm, a1);
 	const vec3	a2b			= a2a - dot(rayDir, a2a) * rayDir;
 	const vec3	a2			= a2a * coneRadius / max(0.0001f, length(a2b));
 
-	const vec3	delta		= worldPos - vertices[0].pos;
+	const vec3	delta		= objPos - vertices[0].pos;
 	const vec3	e1			= vertices[1].pos - vertices[0].pos;
 	const vec3	e2			= vertices[2].pos - vertices[0].pos;
 
-	const float	rcpTriArea	= 1.f / dot(worldNorm, cross(e1, e2));
+	const float	rcpTriArea	= 1.f / dot(objNorm, cross(e1, e2));
 
 	const vec3	eP1			= delta + a1;
-	const float	u1			= dot(worldNorm, cross(eP1, e2)) * rcpTriArea;
-	const float	v1			= dot(worldNorm, cross(e1, eP1)) * rcpTriArea;
+	const float	u1			= dot(objNorm, cross(eP1, e2)) * rcpTriArea;
+	const float	v1			= dot(objNorm, cross(e1, eP1)) * rcpTriArea;
 	const vec2	dPdx		= (1.f - u1 - v1) * vertices[0].texUV + u1 * vertices[1].texUV + v1 * vertices[2].texUV - texUV;
 
 	const vec3	eP2			= delta + a2;
-	const float	u2			= dot(worldNorm, cross(eP2, e2)) * rcpTriArea;
-	const float	v2			= dot(worldNorm, cross(e1, eP2)) * rcpTriArea;
+	const float	u2			= dot(objNorm, cross(eP2, e2)) * rcpTriArea;
+	const float	v2			= dot(objNorm, cross(e1, eP2)) * rcpTriArea;
 	const vec2	dPdy		= (1.f - u2 - v2) * vertices[0].texUV + u2 * vertices[1].texUV + v2 * vertices[2].texUV - texUV;
 
 	return vec2[2] (dPdx, dPdy);
