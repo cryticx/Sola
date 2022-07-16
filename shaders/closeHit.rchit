@@ -177,7 +177,7 @@ void main() {
 
 		const vec3	lightHemi	= noiseShadow.x * lightCenterTang + noiseShadow.y * lightCenterBitang + noiseShadow.z * lightCenterNorm;
 
-		const vec3	lightTarget	= lightCenterTarget + noiseShadow * light.radius;
+		const vec3	lightTarget	= lightCenterTarget + lightHemi * light.radius;
 		const vec3	L			= normalize(lightTarget);
 
 		const float	NdotL		= dot(mappedNorm, L);
