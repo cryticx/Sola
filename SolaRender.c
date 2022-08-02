@@ -280,7 +280,7 @@ typedef struct TranscodeTexturesArgs {
 	uint8_t*		semaphores;
 } TranscodeTexturesArgs;
 
-void* transcodeTextures(TranscodeTexturesArgs* args) { // Transcodes KTX textures from textureList into block-compressed ktxTextures
+void* transcodeTextures(TranscodeTexturesArgs* args) {
 	for (uint16_t x = 0; x < args->count; x++) {
 		if (__atomic_compare_exchange_n(&args->semaphores[x], &(uint8_t) {0}, 1, 0, __ATOMIC_SEQ_CST, __ATOMIC_RELAXED))
 			KTX_CHECK(ktxTexture2_TranscodeBasis(args->ktxTextures[x], KTX_TTF_BC7_RGBA, 0))
