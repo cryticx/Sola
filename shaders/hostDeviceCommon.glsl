@@ -73,10 +73,10 @@ struct GeometryOffsets {
 	// 16- or 32-bit indices
 	uint8_t			has16BitIndex;
 
-	// index offset
+	// Index offset
 	uint8_t			material;
 
-	// byte offsets
+	// Byte offsets
 	uint32_t		index;
 	uint32_t		vertex;
 };
@@ -101,7 +101,7 @@ struct Vertex {
 	vec3			norm;
 	vec2			texUV;
 };
-struct Material {
+struct Material { //TODO figure out potential alignment issues
 	// Texture indices
 	uint16_t		colorTexIdx;
 	uint16_t		pbrTexIdx;

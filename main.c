@@ -30,7 +30,7 @@ int main() {
 		glfwSetInputMode(renderEngine.window, GLFW_RAW_MOUSE_MOTION, GLFW_TRUE);
 	
 	glfwGetCursorPos(renderEngine.window, &cursorPos.x, &cursorPos.y);
-	
+
 	vec3 cameraPos			= {0};
 	vec2 cameraOrientation	= {0};
 

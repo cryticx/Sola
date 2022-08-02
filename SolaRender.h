@@ -8,11 +8,11 @@
 
 #include "shaders/hostDeviceCommon.glsl"
 
-#define SR_MAX_SWAP_IMGS		((uint8_t) 3)
 #define SR_MAX_THREADS			((uint8_t) 32)
+#define	SR_MAX_MIP_LEVELS		((uint8_t) 24)
+#define SR_MAX_SWAP_IMGS		((uint8_t) 3)
 #define SR_MAX_QUEUED_FRAMES	((uint8_t) 2)
 #define SR_MAX_RAY_RECURSION	((uint8_t) 2)
-#define	SR_MAX_MIP_LEVELS		((uint8_t) 24)
 
 typedef struct VulkanBuffer {
 	VkBuffer		buffer;
@@ -27,7 +27,9 @@ typedef struct VulkanImage {
 
 typedef struct SolaRender {
 	VkInstance					instance;
-
+#ifndef NDEBUG
+	VkDebugUtilsMessengerEXT	debugMessenger;
+#endif
 	GLFWwindow*					window;
 	VkSurfaceKHR				surface;
 
@@ -36,9 +38,9 @@ typedef struct SolaRender {
 
 	VkQueue						computeQueue;
 	VkQueue						presentQueue;
-	uint32_t					queueFamilyIndex;
+	uint8_t						queueFamilyIndex;
 
-	uint32_t					swapImgCount;
+	uint8_t						swapImgCount;
 	VkSwapchainKHR				swapchain;
 
 	uint8_t						threadCount;
@@ -49,14 +51,10 @@ typedef struct SolaRender {
 	VulkanBuffer				accelStructBuildScratchBuffer;
 
 	VkAccelerationStructureKHR	bottomAccelStructs[SR_MAX_BLAS];
-	VulkanBuffer				bottomAccelStructBuffers[SR_MAX_BLAS];
+	VulkanBuffer				bottomAccelStructBuffer;
 	uint8_t						bottomAccelStructCount;
 
-	VkAccelerationStructureKHR	topAccelStruct;
-	VulkanBuffer				topAccelStructBuffer;
-
-	VulkanBuffer				indexBuffer;
-	VulkanBuffer				vertexBuffer;
+	VulkanBuffer				geometryBuffer; // Indices and vertices
 	VulkanBuffer				materialBuffer;
 
 	uint16_t					textureImageCount;
@@ -67,7 +65,10 @@ typedef struct SolaRender {
 
 	PushConstants				pushConstants;
 
-	VulkanBuffer				instanceBuffer;
+	VkAccelerationStructureKHR	topAccelStruct;
+	VulkanBuffer				topAccelStructBuffer;
+
+	VulkanBuffer				accelStructInstanceBuffer;
 
 	VkDescriptorPool			descriptorPool;
 	VkDescriptorSetLayout		descriptorSetLayout;
@@ -78,18 +79,18 @@ typedef struct SolaRender {
 
 	VulkanImage					rayImage;
 
-	VulkanBuffer				genSBTBuffer;
-	VulkanBuffer				missSBTBuffer;
-	VulkanBuffer				hitSBTBuffer;
+	VulkanBuffer				sbtBuffer;
 
-	VulkanBuffer				rayGenUniformBuffers[SR_MAX_QUEUED_FRAMES];
-	VulkanBuffer				rayHitUniformBuffers[SR_MAX_QUEUED_FRAMES];
 	RayGenUniform				rayGenUniform;
 	RayHitUniform				rayHitUniform;
+
+	uint16_t					uniformBufferAlignment;
+	VulkanBuffer				uniformBuffer; // RayGenUniform[swapImgCount], RayHitUniform[swapImgCount]
 
 	VkSemaphore					imageAvailableSemaphores[SR_MAX_QUEUED_FRAMES];
 	VkSemaphore					renderFinishedSemaphores[SR_MAX_QUEUED_FRAMES];
 	VkFence						renderQueueFences[SR_MAX_QUEUED_FRAMES];
+	uint8_t						idxImageInRenderQueue[SR_MAX_SWAP_IMGS];
 	uint8_t						currentFrame;
 
 	PFN_vkGetAccelerationStructureBuildSizesKHR		vkGetAccelerationStructureBuildSizesKHR;

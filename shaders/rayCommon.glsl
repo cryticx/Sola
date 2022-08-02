@@ -36,11 +36,11 @@ struct PrimaryPayload {
 	float	raySpreadAngle;
 
 	vec3	position;
-	vec3	direction;		// reflection direction
+	vec3	direction;		// Reflection direction
 
 	vec3	hitColor;
 	vec3	attenuation;	// Fresnel attenuation
-	float	coherence;		// perceptual roughness accumulated across hits
+	float	coherence;		// Perceptual roughness accumulated across hits
 };
 struct DecalPayload {
 	float	rayConeRadius;
