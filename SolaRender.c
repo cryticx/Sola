@@ -1272,9 +1272,6 @@ void initializeGeometry(SolaRender* engine) {
 		engine->accelStructBuildScratchBuffer	= createBuffer(engine, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
 			VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, 1, &scratchBufferSize, NULL, &scratchBufferAddr);
 
-		engine->accelStructBuildQueryBuffer		= createBuffer(engine, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-			VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, 1, (VkDeviceSize[1]) { engine->bottomAccelStructCount * sizeof(VkDeviceSize) }, NULL, NULL);
-
 		VkDeviceSize	uncompactBlasMemoryOffset	= 0;
 
 		uint8_t			blasBatchCount				= 0;
@@ -2054,10 +2051,7 @@ void srCreateEngine(SolaRender* engine, GLFWwindow* window, uint8_t threadCount)
 	vkDestroyQueryPool(engine->device, engine->accelStructBuildQueryPool, NULL);
 
 	vkDestroyBuffer(engine->device, engine->accelStructBuildScratchBuffer.buffer, NULL);
-	vkDestroyBuffer(engine->device, engine->accelStructBuildQueryBuffer.buffer, NULL);
-
 	vkFreeMemory(engine->device, engine->accelStructBuildScratchBuffer.memory, NULL);
-	vkFreeMemory(engine->device, engine->accelStructBuildQueryBuffer.memory, NULL);
 }
 void cleanupPipeline(SolaRender* engine) {
 	vkDeviceWaitIdle(engine->device);

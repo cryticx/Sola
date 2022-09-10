@@ -57,7 +57,6 @@ typedef struct SolaRender {
 	VkFence						accelStructBuildFence;
 	VkQueryPool					accelStructBuildQueryPool;
 	VulkanBuffer				accelStructBuildScratchBuffer;
-	VulkanBuffer				accelStructBuildQueryBuffer;
 
 	uint8_t						bottomAccelStructCount;
 	VkAccelerationStructureKHR	bottomAccelStructs[SR_MAX_BLAS];
