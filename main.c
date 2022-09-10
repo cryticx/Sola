@@ -21,7 +21,7 @@ int main() {
 	glfwInit();
 	glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
 	glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
-	
+
 	srCreateEngine(&renderEngine, glfwCreateWindow(1280, 720, "Sola", NULL, NULL), get_nprocs());
 
 	glfwSetInputMode(renderEngine.window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);

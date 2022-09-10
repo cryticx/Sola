@@ -24,7 +24,7 @@ typedef struct VulkanImage {
 	VkDeviceMemory	memory;
 	VkImageView		view;
 } VulkanImage;
-
+// 3163 MB
 typedef struct SolaRender {
 	VkInstance					instance;
 #ifndef NDEBUG
@@ -35,6 +35,12 @@ typedef struct SolaRender {
 
 	VkPhysicalDevice			physicalDevice;
 	VkDevice					device;
+
+	uint16_t					accelStructScratchAlignment;
+	uint16_t					shaderGroupHandleSize;
+	uint16_t					shaderGroupBaseAlignment;
+	uint16_t					shaderGroupHandleAlignment;
+	uint16_t					uniformBufferAlignment;
 
 	VkQueue						computeQueue;
 	VkQueue						presentQueue;
@@ -47,14 +53,18 @@ typedef struct SolaRender {
 
 	VkCommandPool				renderCmdPool, transCmdPool;
 	VkCommandBuffer				renderCmdBuffers[SR_MAX_SWAP_IMGS], accelStructBuildCmdBuffer;
-	VkFence						accelStructBuildCmdBufferFence;
+
+	VkFence						accelStructBuildFence;
+	VkQueryPool					accelStructBuildQueryPool;
 	VulkanBuffer				accelStructBuildScratchBuffer;
+	VulkanBuffer				accelStructBuildQueryBuffer;
 
-	VkAccelerationStructureKHR	bottomAccelStructs[SR_MAX_BLAS];
-	VulkanBuffer				bottomAccelStructBuffer;
 	uint8_t						bottomAccelStructCount;
+	VkAccelerationStructureKHR	bottomAccelStructs[SR_MAX_BLAS];
+	uint8_t						bottomAccelStructBufferCount;
+	VulkanBuffer				bottomAccelStructBuffers[SR_MAX_BLAS]; // Each batch of compacted BLASes is stored in a separate buffer
 
-	VulkanBuffer				geometryBuffer; // Indices and vertices
+	VulkanBuffer				geometryBuffer; // Vertices, indices
 	VulkanBuffer				materialBuffer;
 
 	uint16_t					textureImageCount;
@@ -75,7 +85,7 @@ typedef struct SolaRender {
 	VkDescriptorSet				descriptorSets[SR_MAX_SWAP_IMGS];
 
 	VkPipelineLayout			pipelineLayout;
-	VkPipeline					rayTracePipeline; //TODO hybrid or pure RT pipeline? LoD-like accel-structs?
+	VkPipeline					rayTracePipeline; //TODO hybrid or pure RT pipeline? LoD-like accel-structs? material-sorting? real-time and static GI
 
 	VulkanImage					rayImage;
 
@@ -83,8 +93,6 @@ typedef struct SolaRender {
 
 	RayGenUniform				rayGenUniform;
 	RayHitUniform				rayHitUniform;
-
-	uint16_t					uniformBufferAlignment;
 	VulkanBuffer				uniformBuffer; // RayGenUniform[swapImgCount], RayHitUniform[swapImgCount]
 
 	VkSemaphore					imageAvailableSemaphores[SR_MAX_QUEUED_FRAMES];
@@ -93,15 +101,17 @@ typedef struct SolaRender {
 	uint8_t						idxImageInRenderQueue[SR_MAX_SWAP_IMGS];
 	uint8_t						currentFrame;
 
-	PFN_vkGetAccelerationStructureBuildSizesKHR		vkGetAccelerationStructureBuildSizesKHR;
-	PFN_vkCreateAccelerationStructureKHR			vkCreateAccelerationStructureKHR;
-	PFN_vkCmdBuildAccelerationStructuresKHR			vkCmdBuildAccelerationStructuresKHR;
-	PFN_vkGetAccelerationStructureDeviceAddressKHR	vkGetAccelerationStructureDeviceAddressKHR;
-	PFN_vkDestroyAccelerationStructureKHR			vkDestroyAccelerationStructureKHR;
+	PFN_vkGetAccelerationStructureBuildSizesKHR			vkGetAccelerationStructureBuildSizesKHR;
+	PFN_vkCreateAccelerationStructureKHR				vkCreateAccelerationStructureKHR;
+	PFN_vkCmdBuildAccelerationStructuresKHR				vkCmdBuildAccelerationStructuresKHR;
+	PFN_vkGetAccelerationStructureDeviceAddressKHR		vkGetAccelerationStructureDeviceAddressKHR;
+	PFN_vkCmdWriteAccelerationStructuresPropertiesKHR	vkCmdWriteAccelerationStructuresPropertiesKHR;
+	PFN_vkCmdCopyAccelerationStructureKHR				vkCmdCopyAccelerationStructureKHR;
+	PFN_vkDestroyAccelerationStructureKHR				vkDestroyAccelerationStructureKHR;
 
-	PFN_vkCreateRayTracingPipelinesKHR				vkCreateRayTracingPipelinesKHR;
-	PFN_vkGetRayTracingShaderGroupHandlesKHR		vkGetRayTracingShaderGroupHandlesKHR;
-	PFN_vkCmdTraceRaysKHR							vkCmdTraceRaysKHR;
+	PFN_vkCreateRayTracingPipelinesKHR					vkCreateRayTracingPipelinesKHR;
+	PFN_vkGetRayTracingShaderGroupHandlesKHR			vkGetRayTracingShaderGroupHandlesKHR;
+	PFN_vkCmdTraceRaysKHR								vkCmdTraceRaysKHR;
 } SolaRender;
 
 __attribute__ ((cold))	void srCreateEngine		(SolaRender* engine, GLFWwindow* window, uint8_t threadCount);

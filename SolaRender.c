@@ -146,17 +146,22 @@ VulkanBuffer createBuffer(SolaRender* engine, VkBufferUsageFlags usage, VkMemory
 
 	vkGetBufferMemoryRequirements(engine->device, buffer.buffer, &memoryRequirements);
 
+	VkMemoryDedicatedAllocateInfo dedicatedAllocInfo = {
+		.sType	= VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO,
+		.buffer	= buffer.buffer
+	};
 	VkMemoryAllocateInfo allocInfo = {
 		.sType				= VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+		.pNext				= &dedicatedAllocInfo,
 		.allocationSize		= memoryRequirements.size,
 		.memoryTypeIndex	= selectMemoryType(engine, memoryRequirements.memoryTypeBits, properties)
 	};
 	VkMemoryAllocateFlagsInfo allocFlagsInfo = {
-		.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO,
-		.flags = VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT
+		.sType	= VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO,
+		.flags	= VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT
 	};
 	if (usage & VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT) // Buffer device address
-		allocInfo.pNext = &allocFlagsInfo;
+		dedicatedAllocInfo.pNext = &allocFlagsInfo;
 
 	VK_CHECK(vkAllocateMemory(engine->device, &allocInfo, NULL, &buffer.memory))
 
@@ -217,7 +222,7 @@ VulkanBuffer createBuffer(SolaRender* engine, VkBufferUsageFlags usage, VkMemory
 }
 VulkanImage createImage(SolaRender* engine, VkFormat format, VkExtent2D extent, VkImageUsageFlags usage) {
 	VulkanImage image;
-	
+
 	VkImageSubresourceRange subresourceRange = {
 		.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
 		.levelCount = 1,
@@ -240,8 +245,13 @@ VulkanImage createImage(SolaRender* engine, VkFormat format, VkExtent2D extent, 
 	VkMemoryRequirements memoryRequirements;
 	vkGetImageMemoryRequirements(engine->device, image.image, &memoryRequirements);
 
+	VkMemoryDedicatedAllocateInfo dedicatedAllocInfo = {
+		.sType	= VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO,
+		.image	= image.image
+	};
 	VkMemoryAllocateInfo memoryAllocateInfo = {
 		.sType				= VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+		.pNext				= &dedicatedAllocInfo,
 		.allocationSize		= memoryRequirements.size,
 		.memoryTypeIndex	= selectMemoryType(engine, memoryRequirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)
 	};
@@ -429,38 +439,6 @@ VkDeviceMemory createTextureImages(SolaRender* engine, uint16_t count, ktxTextur
 		vkFreeMemory(engine->device, stagingBuffer.memory, NULL);
 	}
 	return imageMemory;
-}
-void buildAccelerationStructures(SolaRender* engine, uint8_t infoCount, VkAccelerationStructureBuildGeometryInfoKHR* geometryInfos, VkAccelerationStructureBuildRangeInfoKHR** rangeInfosArray) { // Waits for prior builds to finish, then executes a new one
-	VK_CHECK(vkWaitForFences(engine->device, 1, &engine->accelStructBuildCmdBufferFence, VK_TRUE, UINT64_MAX))
-	VK_CHECK(vkResetFences(engine->device, 1, &engine->accelStructBuildCmdBufferFence))
-	VK_CHECK(vkResetCommandPool(engine->device, engine->transCmdPool, 0))
-	
-	VkCommandBufferBeginInfo commandBufferBeginInfo = {
-		.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
-		.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT
-	};
-	VK_CHECK(vkBeginCommandBuffer(engine->accelStructBuildCmdBuffer, &commandBufferBeginInfo))
-
-	for (uint8_t x = 0; x < infoCount; x++) {
-		engine->vkCmdBuildAccelerationStructuresKHR(engine->accelStructBuildCmdBuffer, 1, &geometryInfos[x], (const VkAccelerationStructureBuildRangeInfoKHR**) &rangeInfosArray[x]);
-
-		VkMemoryBarrier barrier = {
-			.sType			= VK_STRUCTURE_TYPE_MEMORY_BARRIER,
-			.srcAccessMask	= VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
-			.dstAccessMask	= VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR
-		};
-		vkCmdPipelineBarrier(engine->accelStructBuildCmdBuffer, VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-			VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR, 0, 1, &barrier, 0, NULL, 0, NULL);
-	}
-	
-	VK_CHECK(vkEndCommandBuffer(engine->accelStructBuildCmdBuffer))
-	
-	VkSubmitInfo submitInfo = {
-		.sType				= VK_STRUCTURE_TYPE_SUBMIT_INFO,
-		.commandBufferCount	= 1,
-		.pCommandBuffers	= &engine->accelStructBuildCmdBuffer
-	};
-	VK_CHECK(vkQueueSubmit(engine->computeQueue, 1, &submitInfo, engine->accelStructBuildCmdBufferFence));
 }
 VkShaderModule createShaderModule(SolaRender* engine, char* shaderPath) {
 	FILE *shaderFile = fopen(shaderPath, "r");
@@ -659,7 +637,7 @@ void selectPhysicalDevice(SolaRender* engine) {
 	fprintf(stderr, "Failed to find GPU with required capabilities!\n");
 	exit(1);
 }
-void createLogicalDevice(SolaRender* engine) {
+void createDevice(SolaRender* engine) {
 	// Logical device
 	{
 		float queuePriority = 1.f;
@@ -720,17 +698,40 @@ void createLogicalDevice(SolaRender* engine) {
 		};
 		VK_CHECK(vkCreateDevice(engine->physicalDevice, &deviceCreateInfo, NULL, &engine->device))
 	}
-	// Command pools
+	// Physical device properties
 	{
-		VkCommandPoolCreateInfo poolInfo = {
+		VkPhysicalDeviceRayTracingPipelinePropertiesKHR rayTracePipelineProperties = {
+			.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_PROPERTIES_KHR,
+		};
+		VkPhysicalDeviceAccelerationStructurePropertiesKHR accelStructProperties = {
+			.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_PROPERTIES_KHR,
+			.pNext = &rayTracePipelineProperties
+		};
+		VkPhysicalDeviceProperties2 physDeviceProperties = {
+			.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2,
+			.pNext = &accelStructProperties
+		};
+		vkGetPhysicalDeviceProperties2(engine->physicalDevice, &physDeviceProperties);
+
+		engine->shaderGroupHandleSize		= rayTracePipelineProperties.shaderGroupHandleSize;
+		engine->shaderGroupBaseAlignment	= rayTracePipelineProperties.shaderGroupBaseAlignment;
+		engine->shaderGroupHandleAlignment	= rayTracePipelineProperties.shaderGroupHandleAlignment;
+
+		engine->accelStructScratchAlignment	= accelStructProperties.minAccelerationStructureScratchOffsetAlignment;
+
+		engine->uniformBufferAlignment		= physDeviceProperties.properties.limits.minUniformBufferOffsetAlignment;
+	}
+	// Command buffers
+	{
+		VkCommandPoolCreateInfo cmdPoolInfo = {
 			.sType				= VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
 			.queueFamilyIndex	= engine->queueFamilyIndex
 		};
-		VK_CHECK(vkCreateCommandPool(engine->device, &poolInfo, NULL, &engine->renderCmdPool))
+		VK_CHECK(vkCreateCommandPool(engine->device, &cmdPoolInfo, NULL, &engine->renderCmdPool))
 		
-		poolInfo.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
+		cmdPoolInfo.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
 
-		VK_CHECK(vkCreateCommandPool(engine->device, &poolInfo, NULL, &engine->transCmdPool))
+		VK_CHECK(vkCreateCommandPool(engine->device, &cmdPoolInfo, NULL, &engine->transCmdPool))
 
 		VkCommandBufferAllocateInfo cmdBufferAllocInfo = {
 			.sType				= VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
@@ -739,12 +740,21 @@ void createLogicalDevice(SolaRender* engine) {
 			.commandBufferCount	= 1
 		};
 		VK_CHECK(vkAllocateCommandBuffers(engine->device, &cmdBufferAllocInfo, &engine->accelStructBuildCmdBuffer))
-		
+	}
+	// Acceleration-structure-building resources
+	{
+		VkQueryPoolCreateInfo queryPoolInfo = {
+			.sType		= VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO,
+			.queryType	= VK_QUERY_TYPE_ACCELERATION_STRUCTURE_COMPACTED_SIZE_KHR,
+			.queryCount	= SR_MAX_BLAS
+		};
+		vkCreateQueryPool(engine->device, &queryPoolInfo, NULL, &engine->accelStructBuildQueryPool);
+
 		VkFenceCreateInfo fenceInfo = {
 			.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
 			.flags = VK_FENCE_CREATE_SIGNALED_BIT
 		};
-		VK_CHECK(vkCreateFence(engine->device, &fenceInfo, NULL, &engine->accelStructBuildCmdBufferFence))
+		VK_CHECK(vkCreateFence(engine->device, &fenceInfo, NULL, &engine->accelStructBuildFence))
 	}
 	// Texture sampler
 	{
@@ -838,15 +848,17 @@ void createLogicalDevice(SolaRender* engine) {
 	vkGetDeviceQueue(engine->device, engine->queueFamilyIndex, 0, &engine->computeQueue);
 	vkGetDeviceQueue(engine->device, engine->queueFamilyIndex, 0, &engine->presentQueue);
 	
-	engine->vkGetAccelerationStructureBuildSizesKHR		= (PFN_vkGetAccelerationStructureBuildSizesKHR)		vkGetDeviceProcAddr(engine->device, "vkGetAccelerationStructureBuildSizesKHR");
-	engine->vkCreateAccelerationStructureKHR			= (PFN_vkCreateAccelerationStructureKHR)			vkGetDeviceProcAddr(engine->device, "vkCreateAccelerationStructureKHR");
-	engine->vkCmdBuildAccelerationStructuresKHR			= (PFN_vkCmdBuildAccelerationStructuresKHR)			vkGetDeviceProcAddr(engine->device, "vkCmdBuildAccelerationStructuresKHR");
-	engine->vkGetAccelerationStructureDeviceAddressKHR	= (PFN_vkGetAccelerationStructureDeviceAddressKHR)	vkGetDeviceProcAddr(engine->device, "vkGetAccelerationStructureDeviceAddressKHR");
-	engine->vkDestroyAccelerationStructureKHR			= (PFN_vkDestroyAccelerationStructureKHR)			vkGetDeviceProcAddr(engine->device, "vkDestroyAccelerationStructureKHR");
+	engine->vkGetAccelerationStructureBuildSizesKHR			= (PFN_vkGetAccelerationStructureBuildSizesKHR)			vkGetDeviceProcAddr(engine->device, "vkGetAccelerationStructureBuildSizesKHR");
+	engine->vkCreateAccelerationStructureKHR				= (PFN_vkCreateAccelerationStructureKHR)				vkGetDeviceProcAddr(engine->device, "vkCreateAccelerationStructureKHR");
+	engine->vkCmdBuildAccelerationStructuresKHR				= (PFN_vkCmdBuildAccelerationStructuresKHR)				vkGetDeviceProcAddr(engine->device, "vkCmdBuildAccelerationStructuresKHR");
+	engine->vkGetAccelerationStructureDeviceAddressKHR		= (PFN_vkGetAccelerationStructureDeviceAddressKHR)		vkGetDeviceProcAddr(engine->device, "vkGetAccelerationStructureDeviceAddressKHR");
+	engine->vkCmdWriteAccelerationStructuresPropertiesKHR	= (PFN_vkCmdWriteAccelerationStructuresPropertiesKHR)	vkGetDeviceProcAddr(engine->device, "vkCmdWriteAccelerationStructuresPropertiesKHR");
+	engine->vkCmdCopyAccelerationStructureKHR				= (PFN_vkCmdCopyAccelerationStructureKHR)				vkGetDeviceProcAddr(engine->device, "vkCmdCopyAccelerationStructureKHR");
+	engine->vkDestroyAccelerationStructureKHR				= (PFN_vkDestroyAccelerationStructureKHR)				vkGetDeviceProcAddr(engine->device, "vkDestroyAccelerationStructureKHR");
 	
-	engine->vkCreateRayTracingPipelinesKHR				= (PFN_vkCreateRayTracingPipelinesKHR)				vkGetDeviceProcAddr(engine->device, "vkCreateRayTracingPipelinesKHR");
-	engine->vkGetRayTracingShaderGroupHandlesKHR		= (PFN_vkGetRayTracingShaderGroupHandlesKHR)		vkGetDeviceProcAddr(engine->device, "vkGetRayTracingShaderGroupHandlesKHR");
-	engine->vkCmdTraceRaysKHR							= (PFN_vkCmdTraceRaysKHR)							vkGetDeviceProcAddr(engine->device, "vkCmdTraceRaysKHR");
+	engine->vkCreateRayTracingPipelinesKHR					= (PFN_vkCreateRayTracingPipelinesKHR)					vkGetDeviceProcAddr(engine->device, "vkCreateRayTracingPipelinesKHR");
+	engine->vkGetRayTracingShaderGroupHandlesKHR			= (PFN_vkGetRayTracingShaderGroupHandlesKHR)			vkGetDeviceProcAddr(engine->device, "vkGetRayTracingShaderGroupHandlesKHR");
+	engine->vkCmdTraceRaysKHR								= (PFN_vkCmdTraceRaysKHR)								vkGetDeviceProcAddr(engine->device, "vkCmdTraceRaysKHR");
 
 	if (unlikely(!engine->vkGetAccelerationStructureBuildSizesKHR || !engine->vkCreateAccelerationStructureKHR || !engine->vkCmdBuildAccelerationStructuresKHR
 			|| !engine->vkGetAccelerationStructureDeviceAddressKHR || !engine->vkDestroyAccelerationStructureKHR || !engine->vkCreateRayTracingPipelinesKHR
@@ -856,8 +868,8 @@ void createLogicalDevice(SolaRender* engine) {
 	}
 }
 void initializeGeometry(SolaRender* engine) {
-	VkDeviceSize	scratchSize = 0;
-	VkDeviceAddress	scratchAddr;
+	VkDeviceSize	scratchBufferSize = 0;
+	VkDeviceAddress	scratchBufferAddr;
 
 	VkAccelerationStructureInstanceKHR asInstances[SR_MAX_BLAS];
 
@@ -1144,10 +1156,10 @@ void initializeGeometry(SolaRender* engine) {
 		engine->materialBuffer = createBuffer(engine, VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
 			VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, 1, (VkDeviceSize[1]) { materialCount * sizeof(Material) }, (const void*[1]) { &materials }, &engine->pushConstants.materialAddr);
 
-		VkAccelerationStructureBuildRangeInfoKHR*		buildRangeInfoSlices[SR_MAX_BLAS];
+		VkAccelerationStructureBuildRangeInfoKHR*		buildRangeInfosSlices[SR_MAX_BLAS];
 		VkAccelerationStructureBuildGeometryInfoKHR		buildGeometryInfos[SR_MAX_BLAS];
 		VkAccelerationStructureBuildSizesInfoKHR		buildSizesInfos[SR_MAX_BLAS];
-		VkAccelerationStructureCreateInfoKHR			accelStructInfos[SR_MAX_BLAS];
+		VkAccelerationStructureCreateInfoKHR			asInfos[SR_MAX_BLAS];
 
 		uint8_t	isBlasPairDecal	= 0;
 
@@ -1157,17 +1169,20 @@ void initializeGeometry(SolaRender* engine) {
 		uint32_t vertexOffset	= 0;
 		uint32_t indexOffset	= 0;
 
-		VkDeviceSize blasSizes[SR_MAX_BLAS];
+		VkAccelerationStructureKHR uncompactedBlases[SR_MAX_BLAS];
 
-		for (uint8_t idxBlas = 0; idxBlas < engine->bottomAccelStructCount; idxBlas++) { // Setup for BLAS building
+		const uint16_t	blasMemoryAlignment		= 256 - 1; // Acceleration structures must be 256B-aligned
+		VkDeviceSize	uncompactBlasBufferSize	= 256000000; // Restrict memory-usage for uncompacted BLASes, capped at largest BLAS, but w/ a minimum to batch small BLASes
+
+		for (uint8_t idxBlas = 0; idxBlas < engine->bottomAccelStructCount; idxBlas++) { // Setup BLAS info
 			uint32_t primCounts[sizeof(engine->rayHitUniform.geometryOffsets) / sizeof(GeometryOffsets)];
 
-			buildRangeInfoSlices[idxBlas] = &buildRangeInfos[idxGeom];
+			buildRangeInfosSlices[idxBlas] = &buildRangeInfos[idxGeom];
 
 			buildGeometryInfos[idxBlas].sType						= VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
 			buildGeometryInfos[idxBlas].pNext						= NULL;
 			buildGeometryInfos[idxBlas].type						= VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
-			buildGeometryInfos[idxBlas].flags						= VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
+			buildGeometryInfos[idxBlas].flags						= VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR | VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_COMPACTION_BIT_KHR;
 			buildGeometryInfos[idxBlas].mode						= VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
 			buildGeometryInfos[idxBlas].srcAccelerationStructure	= VK_NULL_HANDLE;
 			buildGeometryInfos[idxBlas].dstAccelerationStructure	= VK_NULL_HANDLE;
@@ -1243,50 +1258,157 @@ void initializeGeometry(SolaRender* engine) {
 			engine->vkGetAccelerationStructureBuildSizesKHR(engine->device, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
 				&buildGeometryInfos[idxBlas], primCounts, &buildSizesInfos[idxBlas]);
 
-			blasSizes[idxBlas] = buildSizesInfos[idxBlas].accelerationStructureSize + (-buildSizesInfos[idxBlas].accelerationStructureSize & 255); // Acceleration structures must be 256B-aligned
+			if (uncompactBlasBufferSize < buildSizesInfos[idxBlas].accelerationStructureSize)
+				uncompactBlasBufferSize = buildSizesInfos[idxBlas].accelerationStructureSize;
 
-			if (scratchSize < buildSizesInfos[idxBlas].buildScratchSize)
-				scratchSize = buildSizesInfos[idxBlas].buildScratchSize;
+			if (scratchBufferSize < buildSizesInfos[idxBlas].buildScratchSize)
+				scratchBufferSize = buildSizesInfos[idxBlas].buildScratchSize;
 		}
-		blasSizes[engine->bottomAccelStructCount - 1] = buildSizesInfos[engine->bottomAccelStructCount - 1].accelerationStructureSize;
+		uncompactBlasBufferSize = uncompactBlasBufferSize + (-uncompactBlasBufferSize & blasMemoryAlignment);
 
-		engine->bottomAccelStructBuffer = createBuffer(engine, VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR,
-			VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, engine->bottomAccelStructCount, blasSizes, NULL, NULL);
+		VulkanBuffer uncompactBlasBuffer		= createBuffer(engine, VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR,
+			VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, 1, &uncompactBlasBufferSize, NULL, NULL);
 
-		engine->accelStructBuildScratchBuffer = createBuffer(engine, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-			VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, 1, &scratchSize, NULL, &scratchAddr);
+		engine->accelStructBuildScratchBuffer	= createBuffer(engine, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+			VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, 1, &scratchBufferSize, NULL, &scratchBufferAddr);
 
-		VkDeviceSize blasMemoryOffset = 0;
+		engine->accelStructBuildQueryBuffer		= createBuffer(engine, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+			VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, 1, (VkDeviceSize[1]) { engine->bottomAccelStructCount * sizeof(VkDeviceSize) }, NULL, NULL);
 
-		for (uint8_t x = 0; x < engine->bottomAccelStructCount; x++) {
-			accelStructInfos[x].sType			= VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR;
-			accelStructInfos[x].pNext			= NULL;
-			accelStructInfos[x].createFlags		= 0;
-			accelStructInfos[x].buffer			= engine->bottomAccelStructBuffer.buffer,
-			accelStructInfos[x].offset			= blasMemoryOffset,
-			accelStructInfos[x].size			= blasSizes[x];
-			accelStructInfos[x].type			= VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
-			accelStructInfos[x].deviceAddress	= 0;
+		VkDeviceSize	uncompactBlasMemoryOffset	= 0;
 
-			blasMemoryOffset += blasSizes[x];
+		uint8_t			blasBatchCount				= 0;
+		uint8_t			blasBatchStartIdx			= 0;
 
-			VK_CHECK(engine->vkCreateAccelerationStructureKHR(engine->device, &accelStructInfos[x], NULL, &engine->bottomAccelStructs[x]))
+		VkCommandBufferBeginInfo cmdBufferBeginInfo = {
+			.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+			.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT
+		};
+		VkSubmitInfo submitInfo = {
+			.sType				= VK_STRUCTURE_TYPE_SUBMIT_INFO,
+			.commandBufferCount	= 1,
+			.pCommandBuffers	= &engine->accelStructBuildCmdBuffer
+		};
+		for (uint8_t idxUncompactBlas = 0; idxUncompactBlas < engine->bottomAccelStructCount; idxUncompactBlas++) { // Create BLASes, then build and compact them in batches
+			asInfos[idxUncompactBlas].sType			= VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR;
+			asInfos[idxUncompactBlas].pNext			= NULL;
+			asInfos[idxUncompactBlas].createFlags	= 0;
+			asInfos[idxUncompactBlas].buffer		= uncompactBlasBuffer.buffer;
+			asInfos[idxUncompactBlas].offset		= uncompactBlasMemoryOffset;
+			asInfos[idxUncompactBlas].size			= buildSizesInfos[idxUncompactBlas].accelerationStructureSize;
+			asInfos[idxUncompactBlas].type			= VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
+			asInfos[idxUncompactBlas].deviceAddress	= 0;
 
-			buildGeometryInfos[x].dstAccelerationStructure	= engine->bottomAccelStructs[x];
-			buildGeometryInfos[x].scratchData.deviceAddress	= scratchAddr;
+			VK_CHECK(engine->vkCreateAccelerationStructureKHR(engine->device, &asInfos[idxUncompactBlas], NULL, &uncompactedBlases[idxUncompactBlas]))
 
-			VkAccelerationStructureDeviceAddressInfoKHR accelStructAddressInfo = {
-				.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR,
-				.accelerationStructure = engine->bottomAccelStructs[x]
-			};
-			asInstances[x].accelerationStructureReference = engine->vkGetAccelerationStructureDeviceAddressKHR(engine->device, &accelStructAddressInfo);
+			buildGeometryInfos[idxUncompactBlas].dstAccelerationStructure	= uncompactedBlases[idxUncompactBlas];
+			buildGeometryInfos[idxUncompactBlas].scratchData.deviceAddress	= scratchBufferAddr;
+
+			uncompactBlasMemoryOffset += asInfos[idxUncompactBlas].size + (-asInfos[idxUncompactBlas].size & blasMemoryAlignment);
+
+			blasBatchCount++;
+
+			if (idxUncompactBlas == engine->bottomAccelStructCount - 1 || uncompactBlasMemoryOffset + buildSizesInfos[idxUncompactBlas + 1].accelerationStructureSize > uncompactBlasBufferSize) { // Batching BLASes under a limited size
+				VK_CHECK(vkWaitForFences(engine->device, 1, &engine->accelStructBuildFence, VK_TRUE, UINT64_MAX))
+				VK_CHECK(vkResetFences(engine->device, 1, &engine->accelStructBuildFence))
+				VK_CHECK(vkResetCommandPool(engine->device, engine->transCmdPool, 0))
+
+				VK_CHECK(vkBeginCommandBuffer(engine->accelStructBuildCmdBuffer, &cmdBufferBeginInfo))
+
+				for (uint8_t idxBlasInBatch = 0; idxBlasInBatch < blasBatchCount; idxBlasInBatch++) {
+					uint8_t idxBlas = blasBatchStartIdx + idxBlasInBatch;
+
+					engine->vkCmdBuildAccelerationStructuresKHR(engine->accelStructBuildCmdBuffer, 1, &buildGeometryInfos[idxBlas],
+						(const VkAccelerationStructureBuildRangeInfoKHR**) &buildRangeInfosSlices[idxBlas]);
+
+					VkMemoryBarrier barrier = {
+						.sType			= VK_STRUCTURE_TYPE_MEMORY_BARRIER,
+						.srcAccessMask	= VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
+						.dstAccessMask	= VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR
+					};
+					vkCmdPipelineBarrier(engine->accelStructBuildCmdBuffer, VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+						VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR, 0, 1, &barrier, 0, NULL, 0, NULL);
+				}
+				vkCmdResetQueryPool(engine->accelStructBuildCmdBuffer, engine->accelStructBuildQueryPool, 0, blasBatchCount);
+
+				engine->vkCmdWriteAccelerationStructuresPropertiesKHR(engine->accelStructBuildCmdBuffer, blasBatchCount,
+					&uncompactedBlases[blasBatchStartIdx], VK_QUERY_TYPE_ACCELERATION_STRUCTURE_COMPACTED_SIZE_KHR, engine->accelStructBuildQueryPool, 0); // Write compacted-sizes to query-pool after batch is finished building
+
+				VK_CHECK(vkEndCommandBuffer(engine->accelStructBuildCmdBuffer))
+
+				VK_CHECK(vkQueueSubmit(engine->computeQueue, 1, &submitInfo, engine->accelStructBuildFence));
+
+				VK_CHECK(vkWaitForFences(engine->device, 1, &engine->accelStructBuildFence, VK_TRUE, UINT64_MAX))
+				VK_CHECK(vkResetFences(engine->device, 1, &engine->accelStructBuildFence))
+				VK_CHECK(vkResetCommandPool(engine->device, engine->transCmdPool, 0))
+
+				vkGetQueryPoolResults(engine->device, engine->accelStructBuildQueryPool, 0, blasBatchCount, blasBatchCount * sizeof(VkAccelerationStructureCreateInfoKHR),
+					&asInfos[blasBatchStartIdx].size, sizeof(VkAccelerationStructureCreateInfoKHR), VK_QUERY_RESULT_WAIT_BIT | VK_QUERY_RESULT_64_BIT); // Get compacted-sizes from query-pool
+
+				VkDeviceSize compactBlasMemoryOffset = 0;
+
+				for (uint8_t idxBlasInBatch = 0; idxBlasInBatch < blasBatchCount; idxBlasInBatch++) {
+					uint8_t idxBlas = blasBatchStartIdx + idxBlasInBatch;
+
+					compactBlasMemoryOffset += asInfos[idxBlas].size + (-asInfos[idxBlas].size & blasMemoryAlignment);
+				}
+				engine->bottomAccelStructBuffers[engine->bottomAccelStructBufferCount] = createBuffer(engine,
+					VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, 1, &compactBlasMemoryOffset, NULL, NULL); // One buffer for each batch of BLASes
+
+				VK_CHECK(vkBeginCommandBuffer(engine->accelStructBuildCmdBuffer, &cmdBufferBeginInfo))
+
+				compactBlasMemoryOffset = 0;
+
+				for (uint8_t idxBlasInBatch = 0; idxBlasInBatch < blasBatchCount; idxBlasInBatch++) { // Create the compacted BLASes, then compaction-copy the uncompacted ones to them
+					uint8_t idxBlas = blasBatchStartIdx + idxBlasInBatch;
+
+					asInfos[idxBlas].buffer = engine->bottomAccelStructBuffers[engine->bottomAccelStructBufferCount].buffer;
+					asInfos[idxBlas].offset = compactBlasMemoryOffset;
+
+					compactBlasMemoryOffset += asInfos[idxBlas].size + (-asInfos[idxBlas].size & blasMemoryAlignment);
+
+					VK_CHECK(engine->vkCreateAccelerationStructureKHR(engine->device, &asInfos[idxBlas], NULL, &engine->bottomAccelStructs[idxBlas]))
+
+					VkCopyAccelerationStructureInfoKHR copyASInfo = {
+						.sType	= VK_STRUCTURE_TYPE_COPY_ACCELERATION_STRUCTURE_INFO_KHR,
+						.src	= uncompactedBlases[idxBlas],
+						.dst	= engine->bottomAccelStructs[idxBlas],
+						.mode	= VK_COPY_ACCELERATION_STRUCTURE_MODE_COMPACT_KHR
+					};
+					engine->vkCmdCopyAccelerationStructureKHR(engine->accelStructBuildCmdBuffer, &copyASInfo);
+				}
+				VK_CHECK(vkEndCommandBuffer(engine->accelStructBuildCmdBuffer))
+
+				VK_CHECK(vkQueueSubmit(engine->computeQueue, 1, &submitInfo, engine->accelStructBuildFence));
+
+				uncompactBlasMemoryOffset	= 0;
+
+				blasBatchCount				= 0;
+				blasBatchStartIdx			= idxUncompactBlas + 1;
+
+				engine->bottomAccelStructBufferCount++;
+			}
 		}
-		buildAccelerationStructures(engine, engine->bottomAccelStructCount, buildGeometryInfos, buildRangeInfoSlices);
-
 		free(vertices);
 		
 		for (uint8_t x = 0; x < sceneCount; x++)
 			cgltf_free(sceneData[x]);
+
+		VK_CHECK(vkWaitForFences(engine->device, 1, &engine->accelStructBuildFence, VK_TRUE, UINT64_MAX))
+		VK_CHECK(vkResetFences(engine->device, 1, &engine->accelStructBuildFence))
+		VK_CHECK(vkResetCommandPool(engine->device, engine->transCmdPool, 0))
+
+		for (uint8_t x = 0; x < engine->bottomAccelStructCount; x++) {
+			engine->vkDestroyAccelerationStructureKHR(engine->device, uncompactedBlases[x], NULL);
+
+			VkAccelerationStructureDeviceAddressInfoKHR asAddressInfo = {
+				.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR,
+				.accelerationStructure = engine->bottomAccelStructs[x]
+			};
+			asInstances[x].accelerationStructureReference = engine->vkGetAccelerationStructureDeviceAddressKHR(engine->device, &asAddressInfo);
+		}
+		vkDestroyBuffer(engine->device, uncompactBlasBuffer.buffer, NULL);
+		vkFreeMemory(engine->device, uncompactBlasBuffer.memory, NULL);
 	}
 	// Top-level acceleration structure
 	{
@@ -1308,7 +1430,7 @@ void initializeGeometry(SolaRender* engine) {
 			.type						= VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR,
 			.geometryCount				= 1,
 			.pGeometries				= &asGeometry,
-			.scratchData.deviceAddress	= scratchAddr
+			.scratchData.deviceAddress	= scratchBufferAddr
 		};
 		VkAccelerationStructureBuildRangeInfoKHR buildRangeInfo = { .primitiveCount	= engine->bottomAccelStructCount };
 
@@ -1316,31 +1438,46 @@ void initializeGeometry(SolaRender* engine) {
 
 		engine->vkGetAccelerationStructureBuildSizesKHR(engine->device, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR, &buildGeometryInfo, &buildRangeInfo.primitiveCount, &buildSizesInfo);
 		
-		if (unlikely(scratchSize < buildSizesInfo.accelerationStructureSize)) { // In the theoretical event that the max scratch size for BLASes isn't enough for the TLAS, handle it
-			VK_CHECK(vkWaitForFences(engine->device, 1, &engine->accelStructBuildCmdBufferFence, VK_TRUE, UINT64_MAX))
+		if (unlikely(scratchBufferSize < buildSizesInfo.accelerationStructureSize)) { // In the theoretical event that the max scratch size for BLASes isn't enough for the TLAS, handle it
+			VK_CHECK(vkWaitForFences(engine->device, 1, &engine->accelStructBuildFence, VK_TRUE, UINT64_MAX))
 
 			vkDestroyBuffer(engine->device, engine->accelStructBuildScratchBuffer.buffer, NULL);
 			vkFreeMemory(engine->device, engine->accelStructBuildScratchBuffer.memory, NULL);
 
-			scratchSize = buildSizesInfo.accelerationStructureSize;
+			scratchBufferSize = buildSizesInfo.accelerationStructureSize;
 
 			engine->accelStructBuildScratchBuffer = createBuffer(engine, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-				VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, 1, &scratchSize, NULL, &buildGeometryInfo.scratchData.deviceAddress);
+				VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, 1, &scratchBufferSize, NULL, &buildGeometryInfo.scratchData.deviceAddress);
 		}
 		engine->topAccelStructBuffer = createBuffer(engine, VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR,
 			VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, 1, &buildSizesInfo.accelerationStructureSize, NULL, NULL);
 
-		VkAccelerationStructureCreateInfoKHR accelStructInfo = {
+		VkAccelerationStructureCreateInfoKHR asInfo = {
 			.sType		= VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR,
 			.buffer		= engine->topAccelStructBuffer.buffer,
 			.size		= buildSizesInfo.accelerationStructureSize,
 			.type		= VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR
 		};
-		VK_CHECK(engine->vkCreateAccelerationStructureKHR(engine->device, &accelStructInfo, NULL, &engine->topAccelStruct))
+		VK_CHECK(engine->vkCreateAccelerationStructureKHR(engine->device, &asInfo, NULL, &engine->topAccelStruct))
 		
 		buildGeometryInfo.dstAccelerationStructure = engine->topAccelStruct;
 		
-		buildAccelerationStructures(engine, 1, &buildGeometryInfo, (VkAccelerationStructureBuildRangeInfoKHR*[1]) { &buildRangeInfo });
+		VkCommandBufferBeginInfo cmdBufferBeginInfo = {
+			.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+			.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT
+		};
+		VK_CHECK(vkBeginCommandBuffer(engine->accelStructBuildCmdBuffer, &cmdBufferBeginInfo))
+
+		engine->vkCmdBuildAccelerationStructuresKHR(engine->accelStructBuildCmdBuffer, 1, &buildGeometryInfo, (const VkAccelerationStructureBuildRangeInfoKHR*[1]) { &buildRangeInfo });
+
+		VK_CHECK(vkEndCommandBuffer(engine->accelStructBuildCmdBuffer))
+
+		VkSubmitInfo submitInfo = {
+			.sType				= VK_STRUCTURE_TYPE_SUBMIT_INFO,
+			.commandBufferCount	= 1,
+			.pCommandBuffers	= &engine->accelStructBuildCmdBuffer
+		};
+		VK_CHECK(vkQueueSubmit(engine->computeQueue, 1, &submitInfo, engine->accelStructBuildFence));
 	}
 }
 void createRayTracingPipeline(SolaRender* engine, VkSwapchainKHR oldSwapchain) {
@@ -1587,19 +1724,15 @@ void createRayTracingPipeline(SolaRender* engine, VkSwapchainKHR oldSwapchain) {
 
 		char		handleData[128 * ALL_GROUPS_COUNT];
 
-		uint32_t	handleSize			= rayTracePipelineProperties.shaderGroupHandleSize;
-		uint32_t	groupBaseAlignment	= rayTracePipelineProperties.shaderGroupBaseAlignment;
-		uint32_t	handleAlignment		= rayTracePipelineProperties.shaderGroupHandleAlignment;
+		uint16_t	alignedHandleSize	= engine->shaderGroupHandleSize + (-engine->shaderGroupHandleSize & (engine->shaderGroupHandleAlignment - 1));
 
-		uint16_t	alignedHandleSize	= handleSize + (-handleSize & (handleAlignment - 1));
-
-		genSBTRegion.size				= handleSize;
-		hitSBTRegion.size				= alignedHandleSize * (HIT_GROUP_COUNT	- 1) + handleSize;
-		missSBTRegion.size				= alignedHandleSize * (MISS_GROUP_COUNT	- 1) + handleSize;
+		genSBTRegion.size				= engine->shaderGroupHandleSize;
+		hitSBTRegion.size				= alignedHandleSize * (HIT_GROUP_COUNT	- 1) + engine->shaderGroupHandleSize;
+		missSBTRegion.size				= alignedHandleSize * (MISS_GROUP_COUNT	- 1) + engine->shaderGroupHandleSize;
 
 		uint16_t alignedRegionSizes[3] = {
-			genSBTRegion.size + (-genSBTRegion.size & (groupBaseAlignment - 1)),
-			hitSBTRegion.size + (-hitSBTRegion.size & (groupBaseAlignment - 1)),
+			genSBTRegion.size + (-genSBTRegion.size & (engine->shaderGroupBaseAlignment - 1)),
+			hitSBTRegion.size + (-hitSBTRegion.size & (engine->shaderGroupBaseAlignment - 1)),
 			missSBTRegion.size,
 		};
 		size_t sbtSize = alignedRegionSizes[0] + alignedRegionSizes[1] + alignedRegionSizes[2];
@@ -1879,8 +2012,9 @@ void createRayTracingPipeline(SolaRender* engine, VkSwapchainKHR oldSwapchain) {
 	}
 }
 void srCreateEngine(SolaRender* engine, GLFWwindow* window, uint8_t threadCount) {
-	engine->window			= window;
-	engine->currentFrame	= 0;
+	engine->window							= window;
+	engine->bottomAccelStructBufferCount	= 0;
+	engine->currentFrame					= 0;
 
 	if(threadCount > SR_MAX_THREADS)
 		engine->threadCount = SR_MAX_THREADS;
@@ -1911,14 +2045,19 @@ void srCreateEngine(SolaRender* engine, GLFWwindow* window, uint8_t threadCount)
 	VK_CHECK(glfwCreateWindowSurface(engine->instance, engine->window, NULL, &engine->surface))
 
 	selectPhysicalDevice(engine);
-	createLogicalDevice(engine);
+	createDevice(engine);
 	initializeGeometry(engine);
 	createRayTracingPipeline(engine, VK_NULL_HANDLE);
 
-	VK_CHECK(vkWaitForFences(engine->device, 1, &engine->accelStructBuildCmdBufferFence, VK_TRUE, UINT64_MAX))
+	VK_CHECK(vkWaitForFences(engine->device, 1, &engine->accelStructBuildFence, VK_TRUE, UINT64_MAX))
+
+	vkDestroyQueryPool(engine->device, engine->accelStructBuildQueryPool, NULL);
 
 	vkDestroyBuffer(engine->device, engine->accelStructBuildScratchBuffer.buffer, NULL);
+	vkDestroyBuffer(engine->device, engine->accelStructBuildQueryBuffer.buffer, NULL);
+
 	vkFreeMemory(engine->device, engine->accelStructBuildScratchBuffer.memory, NULL);
+	vkFreeMemory(engine->device, engine->accelStructBuildQueryBuffer.memory, NULL);
 }
 void cleanupPipeline(SolaRender* engine) {
 	vkDeviceWaitIdle(engine->device);
@@ -2026,20 +2165,22 @@ void srDestroyEngine(SolaRender* engine) {
 	for (uint8_t x = 0; x < engine->bottomAccelStructCount; x++)
 		engine->vkDestroyAccelerationStructureKHR(engine->device, engine->bottomAccelStructs[x], NULL);
 
-	vkDestroyFence(engine->device, engine->accelStructBuildCmdBufferFence, NULL);
+	vkDestroyFence(engine->device, engine->accelStructBuildFence, NULL);
 
 	vkDestroyBuffer(engine->device, engine->topAccelStructBuffer.buffer, NULL);
 	vkDestroyBuffer(engine->device, engine->accelStructInstanceBuffer.buffer, NULL);
-	vkDestroyBuffer(engine->device, engine->bottomAccelStructBuffer.buffer, NULL);
 	vkDestroyBuffer(engine->device, engine->materialBuffer.buffer, NULL);
 	vkDestroyBuffer(engine->device, engine->geometryBuffer.buffer, NULL);
 
 	vkFreeMemory(engine->device, engine->topAccelStructBuffer.memory, NULL);
 	vkFreeMemory(engine->device, engine->accelStructInstanceBuffer.memory, NULL);
-	vkFreeMemory(engine->device, engine->bottomAccelStructBuffer.memory, NULL);
 	vkFreeMemory(engine->device, engine->materialBuffer.memory, NULL);
 	vkFreeMemory(engine->device, engine->geometryBuffer.memory, NULL);
-	
+
+	for (uint8_t x = 0; x < engine->bottomAccelStructBufferCount; x++) {
+		vkDestroyBuffer(engine->device, engine->bottomAccelStructBuffers[x].buffer, NULL);
+		vkFreeMemory(engine->device, engine->bottomAccelStructBuffers[x].memory, NULL);
+	}
 	for (uint16_t x = 0; x < engine->textureImageCount; x++) {
 		vkDestroyImageView(engine->device, engine->textureImageViews[x], NULL);
 		vkDestroyImage(engine->device, engine->textureImages[x], NULL);
