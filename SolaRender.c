@@ -1477,7 +1477,7 @@ void initializeGeometry(SolaRender* engine) {
 		VK_CHECK(vkQueueSubmit(engine->computeQueue, 1, &submitInfo, engine->accelStructBuildFence));
 	}
 }
-void createRayTracingPipeline(SolaRender* engine, VkSwapchainKHR oldSwapchain) {
+void createRayTracingPipeline(SolaRender* engine, VkSwapchainKHR oldSwapchain) { // Optionally takes an oldSwapchain parameter if we're recreating it
 	// Swapchain
 	VkImage						swapImages[SR_MAX_SWAP_IMGS];
 	VkSurfaceCapabilitiesKHR	surfaceCapabilities;

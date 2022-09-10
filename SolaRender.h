@@ -24,7 +24,7 @@ typedef struct VulkanImage {
 	VkDeviceMemory	memory;
 	VkImageView		view;
 } VulkanImage;
-// 3163 MB
+
 typedef struct SolaRender {
 	VkInstance					instance;
 #ifndef NDEBUG

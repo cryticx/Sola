@@ -44,7 +44,7 @@ typedef		struct MaterialInfo		MaterialInfo;
 #extension GL_EXT_shader_explicit_arithmetic_types_int32 : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
 
-const uint	SR_MAX_BLAS			= 4;
+const uint	SR_MAX_BLAS			= 64;
 
 const uint	maxTex				= 1024;
 
