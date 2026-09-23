@@ -95,7 +95,7 @@ typedef struct SolaRender {
 	VulkanBuffer				uniformBuffer; // RayGenUniform[swapImgCount], RayHitUniform[swapImgCount]
 
 	VkSemaphore					imageAvailableSemaphores[SR_MAX_QUEUED_FRAMES];
-	VkSemaphore					renderFinishedSemaphores[SR_MAX_QUEUED_FRAMES];
+	VkSemaphore					renderFinishedSemaphores[SR_MAX_SWAP_IMGS];
 	VkFence						renderQueueFences[SR_MAX_QUEUED_FRAMES];
 	uint8_t						idxImageInRenderQueue[SR_MAX_SWAP_IMGS];
 	uint8_t						currentFrame;

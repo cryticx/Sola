@@ -1,7 +1,6 @@
 #include "SolaRender.h"
 
 #include <math.h>
-#include <stdio.h>
 #include <unistd.h>
 
 #include <sys/sysinfo.h>

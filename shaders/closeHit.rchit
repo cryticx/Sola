@@ -3,6 +3,7 @@
 #extension GL_EXT_ray_tracing : require
 #extension GL_EXT_buffer_reference2 : require
 #extension GL_EXT_scalar_block_layout : require
+#extension GL_EXT_nonuniform_qualifier : require
 #extension GL_GOOGLE_include_directive : require
 
 #include "hostDeviceCommon.glsl"
@@ -118,11 +119,11 @@ void main() {
 	const vec3			noiseShadowTex	= texelFetch(sampler2D(textures[unitVec3NoiseTex], texSampler), ivec2((gl_LaunchIDEXT.xy + 0) % 128), 0).rgb * 2.f - 1.f;
 	const vec3			noiseReflectTex	= texelFetch(sampler2D(textures[unitVec3NoiseTex], texSampler), ivec2((gl_LaunchIDEXT.xy + 7) % 128), 0).rgb * 2.f - 1.f;
 
-	const vec3			normTex			= normalize(textureGrad(sampler2D(textures[mat.normTexIdx], texSampler), texUV, dPdxy[0], dPdxy[1]).rgb * 2.f - 1.f);
+	const vec3			normTex			= normalize(textureGrad(sampler2D(textures[nonuniformEXT(mat.normTexIdx)], texSampler), texUV, dPdxy[0], dPdxy[1]).rgb * 2.f - 1.f);
 
-	const vec3			colorTex		= textureGrad(sampler2D(textures[mat.colorTexIdx	], texSampler), texUV, dPdxy[0], dPdxy[1]).rgb;
-	const vec2			pbrTex			= textureGrad(sampler2D(textures[mat.pbrTexIdx		], texSampler), texUV, dPdxy[0], dPdxy[1]).gb; // Green is roughness, blue is metalness
-	const vec3			emissiveTex		= textureGrad(sampler2D(textures[mat.emissiveTexIdx	], texSampler), texUV, dPdxy[0], dPdxy[1]).rgb;
+	const vec3			colorTex		= textureGrad(sampler2D(textures[nonuniformEXT(mat.colorTexIdx)],       texSampler), texUV, dPdxy[0], dPdxy[1]).rgb;
+	const vec2			pbrTex			= textureGrad(sampler2D(textures[nonuniformEXT(mat.pbrTexIdx)],         texSampler), texUV, dPdxy[0], dPdxy[1]).gb; // Green is roughness, blue is metalness
+	const vec3			emissiveTex		= textureGrad(sampler2D(textures[nonuniformEXT(mat.emissiveTexIdx)],    texSampler), texUV, dPdxy[0], dPdxy[1]).rgb;
 
 	const vec3			noiseShadow		= vec3(noiseShadowTex.xy,	abs(noiseShadowTex.z));
 	const vec3			noiseReflect	= vec3(noiseReflectTex.xy,	abs(noiseReflectTex.z));
