@@ -6,7 +6,7 @@ A personal playground for trying/testing out various ray-tracing techniques in V
 
 ## Usage
 
-Place .glb-formatted glTF scenes in the "assets" folder, and be sure to compile the shaders in the "shaders" folder to SPIR-V. Do note: the glTF loader is currently intended to load scenes that are repacked with [gltfpack](https://github.com/zeux/meshoptimizer/tree/master/gltf), with mesh-quantization disabled and textures transcoded to a Basis Universal format within a KTX container.
+Place .glb-formatted glTF scenes in the "assets" folder, and be sure to compile the shaders in the "shaders" folder to SPIR-V (e.g. `glslc -c --target-env=vulkan1.2 --target-spv=spv1.5 *.rgen *.rchit *.rahit *.rmiss`). Do note: the glTF loader is currently intended to load scenes that are repacked with [gltfpack](https://github.com/zeux/meshoptimizer/tree/master/gltf), with mesh-quantization disabled and textures transcoded to a Basis Universal format within a KTX container.
 
 ## Assets
 

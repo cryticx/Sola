@@ -13,4 +13,16 @@ find_package(Vulkan REQUIRED)
 find_package(glfw3 REQUIRED)
 find_package(Ktx REQUIRED)
 
+set (assetsDir "${CMAKE_SOURCE_DIR}/assets")
+set (assetsLink "${CMAKE_CURRENT_BINARY_DIR}/assets")
+add_custom_command(
+        TARGET ${PROJECT_NAME} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E create_symlink ${assetsDir} ${assetsLink}
+)
+set (shadersDir "${CMAKE_SOURCE_DIR}/shaders")
+set (shadersLink "${CMAKE_CURRENT_BINARY_DIR}/shaders")
+add_custom_command(
+        TARGET ${PROJECT_NAME} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E create_symlink ${shadersDir} ${shadersLink}
+)
 target_link_libraries(Sola PRIVATE vulkan glfw ktx m)
